@@ -17,5 +17,5 @@ def display_metrics(stats):
 
 def render_shock_card(max_drawdown):
     if max_drawdown < -0.2:
-        st.error(f"⚠️ REALITY CHECK: You lost {max_drawdown:.2%} at peak.")
+        st.error(f"REALITY CHECK: You lost {max_drawdown:.2%} at peak.")
         st.write(f"You'd need a {max_drawdown/(1+max_drawdown):.2%} gain to recover.")

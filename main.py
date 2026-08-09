@@ -55,6 +55,6 @@ if __name__ == "__main__":
         print(f"Buy & Hold return:     {bh_stats['total_return']:.2%}")
         
         if ma_stats['total_return'] > bh_stats['total_return']:
-            print("\n✅ Moving Average outperformed Buy & Hold")
+            print("\nMoving Average outperformed Buy & Hold")
         else:
-            print("\n✅ Buy & Hold outperformed Moving Average")
+            print("\nBuy & Hold outperformed Moving Average")
