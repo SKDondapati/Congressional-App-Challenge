@@ -1,60 +1,60 @@
-import pandas as pd
 import numpy as np
+import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split
+
 
 def ml_predictor_strategy(data, lookback=5, test_size=0.2):
-    """
-    Generates trading signals using a Random Forest classifier.
-    Predicts if price will go up tomorrow based on past returns and volatility.
-    """
+    """Generate ML-based buy/sell signals using rolling feature windows."""
+    if data is None or data.empty:
+        return data.copy() if data is not None else pd.DataFrame()
+
     df = data.copy()
-    
-    # Create features
-    df['returns'] = df['close'].pct_change()
-    df['volatility'] = df['returns'].rolling(5).std()
+    df['returns_1d'] = df['close'].pct_change()
+    df['returns_5d'] = df['close'].pct_change(periods=max(lookback, 5))
+    df['volume_change'] = df['volume'].pct_change()
     df['momentum'] = df['close'] - df['close'].shift(lookback)
-    
-    # Create target (1 if price goes up tomorrow, 0 if down)
+    df['volatility'] = df['returns_1d'].rolling(window=max(10, lookback), min_periods=1).std()
+    df['high_low_ratio'] = df['high'] / df['low']
     df['target'] = (df['close'].shift(-1) > df['close']).astype(int)
-    
-    # Drop NaN values
-    df = df.dropna()
-    
-    # If not enough data, return all zeros
-    if len(df) < 30:
+
+    df = df.dropna().copy()
+    if len(df) < 50:
         signals = data.copy()
         signals['signal'] = 0
         signals['position'] = 0
         return signals
-    
-    # Features and target
-    feature_cols = ['returns', 'volatility', 'momentum']
-    X = df[feature_cols].values
-    y = df['target'].values
-    
-    # Scale features
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-    
-    # Split into train and test
-    split_idx = int(len(X_scaled) * (1 - test_size))
-    X_train = X_scaled[:split_idx]
-    X_test = X_scaled[split_idx:]
-    y_train = y[:split_idx]
-    y_test = y[split_idx:]
-    
-    # Train model
-    model = RandomForestClassifier(n_estimators=50, max_depth=5, random_state=42)
-    model.fit(X_train, y_train)
-    
-    # Make predictions on all data (or just test)
-    predictions = model.predict(X_scaled)
-    
-    # Create signals DataFrame aligned with original data
-    signals = data.loc[df.index].copy()
-    signals['signal'] = predictions
-    signals['position'] = signals['signal'].diff()
-    
+
+    feature_cols = [
+        'returns_1d',
+        'returns_5d',
+        'volume_change',
+        'momentum',
+        'volatility',
+        'high_low_ratio',
+    ]
+    X = df[feature_cols].to_numpy(dtype=float)
+    y = df['target'].to_numpy(dtype=int)
+
+    signals = data.copy()
+    signals['signal'] = 0
+
+    min_train_rows = max(30, int(len(df) * (1 - test_size)))
+    for i in range(min_train_rows, len(df)):
+        train_X = X[:i]
+        train_y = y[:i]
+        if len(train_X) < 30:
+            continue
+
+        scaler = StandardScaler()
+        train_X_scaled = scaler.fit_transform(train_X)
+        model = RandomForestClassifier(n_estimators=100, max_depth=8, random_state=42)
+        model.fit(train_X_scaled, train_y)
+
+        current_X = X[i:i + 1]
+        pred = model.predict(scaler.transform(current_X))[0]
+        if df.index[i] in signals.index:
+            signals.loc[df.index[i], 'signal'] = int(pred)
+
+    signals['position'] = signals['signal'].diff().fillna(0)
     return signals
