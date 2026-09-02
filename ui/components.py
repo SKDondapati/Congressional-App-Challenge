@@ -44,7 +44,8 @@ def plot_equity_curve(results_df, strategy_name):
         hovermode='x',
         legend=dict(x=0, y=1, bgcolor='rgba(255,255,255,0.8)'),
     )
-    return fig
+    st.plotly_chart(fig, use_container_width=True)
+    return None
 
 
 def plot_drawdown(results_df):
@@ -67,7 +68,8 @@ def plot_drawdown(results_df):
         yaxis_title='Drawdown (%)',
         hovermode='x',
     )
-    return fig
+    st.plotly_chart(fig, use_container_width=True)
+    return None
 
 
 def display_metrics(stats):
