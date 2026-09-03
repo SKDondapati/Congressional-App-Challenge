@@ -3,14 +3,27 @@ import plotly.graph_objects as go
 import streamlit as st
 
 
-def plot_equity_curve(results_df, strategy_name):
+def plot_equity_curve(results_df, strategy_name, palette=None):
+    """Plot portfolio and buy&hold series. Accepts a `palette` dict for accessibility.
+
+    palette keys: 'primary', 'benchmark', 'stress'
+    """
+    if palette is None:
+        primary = '#1f77b4'
+        benchmark = 'gray'
+        stress = '#d62728'
+    else:
+        primary = palette.get('primary', '#1f77b4')
+        benchmark = palette.get('benchmark', 'gray')
+        stress = palette.get('stress', '#d62728')
+
     fig = go.Figure()
     fig.add_trace(
         go.Scatter(
             x=results_df.index,
             y=results_df['portfolio_value'],
             name=f'{strategy_name} Strategy',
-            line=dict(color='blue', width=2),
+            line=dict(color=primary, width=3),
         )
     )
     fig.add_trace(
@@ -18,7 +31,7 @@ def plot_equity_curve(results_df, strategy_name):
             x=results_df.index,
             y=results_df['buy_hold_value'],
             name='Buy & Hold Benchmark',
-            line=dict(color='gray', width=2, dash='dash'),
+            line=dict(color=benchmark, width=2, dash='dash'),
         )
     )
 
@@ -30,7 +43,7 @@ def plot_equity_curve(results_df, strategy_name):
             fig.add_vrect(
                 x0=crash_dates[0],
                 x1=crash_dates[-1],
-                fillcolor='red',
+                fillcolor=stress,
                 opacity=0.1,
                 layer='below',
                 line_width=0,
@@ -45,10 +58,23 @@ def plot_equity_curve(results_df, strategy_name):
         legend=dict(x=0, y=1, bgcolor='rgba(255,255,255,0.8)'),
     )
     st.plotly_chart(fig, use_container_width=True)
+    # Provide a short textual summary for screen readers and captions
+    try:
+        end_val = results_df['portfolio_value'].iloc[-1]
+        max_dd = ((results_df['portfolio_value'] - results_df['portfolio_value'].cummax()) / results_df['portfolio_value'].cummax()).min()
+        st.caption(f"End value: ${end_val:,.2f} • Peak drawdown: {max_dd:.2%}")
+    except Exception:
+        pass
     return None
 
 
-def plot_drawdown(results_df):
+def plot_drawdown(results_df, palette=None):
+    """Plot drawdown; palette can supply 'stress' color."""
+    if palette is None:
+        draw_color = 'red'
+    else:
+        draw_color = palette.get('stress', 'red')
+
     cum_max = results_df['portfolio_value'].cummax()
     drawdown = (results_df['portfolio_value'] - cum_max) / cum_max
 
@@ -58,7 +84,7 @@ def plot_drawdown(results_df):
             x=drawdown.index,
             y=drawdown.values * 100,
             fill='tozeroy',
-            line=dict(color='red', width=1),
+            line=dict(color=draw_color, width=1),
             name='Drawdown %',
         )
     )
@@ -69,15 +95,40 @@ def plot_drawdown(results_df):
         hovermode='x',
     )
     st.plotly_chart(fig, use_container_width=True)
+    try:
+        st.caption(f"Worst drawdown: {drawdown.min():.2%}")
+    except Exception:
+        pass
     return None
 
 
-def display_metrics(stats):
+def display_metrics(stats, show_tooltips=False):
+    """Render key metrics, optionally with beginner-friendly tooltips/translations."""
+    translations = {
+        'Total Return': 'How much your money grew (including gains).',
+        'Sharpe Ratio': 'Risk-adjusted return: reward per unit of price bounciness.',
+        'Max Drawdown': 'Largest peak-to-trough loss seen during the period.',
+        'Final Value': 'Portfolio value at the end of the simulation.',
+    }
+
+    def _label_html(label):
+        if show_tooltips and label in translations:
+            tooltip = translations[label]
+            return f"<span title=\"{tooltip}\">{label}</span>"
+        return label
+
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric('Total Return', f"{stats['total_return']:.2%}")
-    col2.metric('Sharpe Ratio', f"{stats['sharpe_ratio']:.2f}")
-    col3.metric('Max Drawdown', f"{stats['max_drawdown']:.2%}")
-    col4.metric('Final Value', f"${stats['final_value']:,.2f}")
+    col1.markdown(_label_html('Total Return'), unsafe_allow_html=True)
+    col1.write(f"{stats.get('total_return', 0):.2%}")
+
+    col2.markdown(_label_html('Sharpe Ratio'), unsafe_allow_html=True)
+    col2.write(f"{stats.get('sharpe_ratio', 0):.2f}")
+
+    col3.markdown(_label_html('Max Drawdown'), unsafe_allow_html=True)
+    col3.write(f"{stats.get('max_drawdown', 0):.2%}")
+
+    col4.markdown(_label_html('Final Value'), unsafe_allow_html=True)
+    col4.write(f"${stats.get('final_value', 0):,.2f}")
 
 
 def render_shock_card(stats, strategy_name):
@@ -106,17 +157,32 @@ def render_educational_footer():
     st.caption('Built by students for the Congressional App Challenge')
 
 
-def render_beginner_explanation(results_dict, ticker):
+def render_beginner_explanation(results_dict, ticker, show_tooltips=True):
     st.markdown(f"### Beginner Summary for {ticker}")
     st.write("This summary explains results in plain language so you can learn what happened.")
+    term_map = {
+        'Total return': 'How much the money changed over the period.',
+        'Final value': 'The dollar amount you would have at the end.',
+        'Maximum drawdown': 'The biggest loss from a prior high point.'
+    }
+
     for name, (sim, stats) in results_dict.items():
         st.markdown(f"**{name}**")
-        st.write(f"Final value: ${stats.get('final_value', 0):,.2f}")
-        st.write(f"Total return: {stats.get('total_return', 0):.2%}")
-        dd = stats.get('max_drawdown', 0.0)
-        st.write(f"Maximum drawdown: {dd:.2%}")
-        if dd < -0.2:
-            st.warning("This strategy had large losses during a stress period. Consider diversifying and using smaller position sizes.")
+        fv_label = 'Final value'
+        tr_label = 'Total return'
+        dd_label = 'Maximum drawdown'
+
+        if show_tooltips:
+            st.markdown(f"<strong title=\"{term_map[fv_label]}\">{fv_label}</strong>: ${stats.get('final_value', 0):,.2f}", unsafe_allow_html=True)
+            st.markdown(f"<strong title=\"{term_map[tr_label]}\">{tr_label}</strong>: {stats.get('total_return', 0):.2%}", unsafe_allow_html=True)
+            st.markdown(f"<strong title=\"{term_map[dd_label]}\">{dd_label}</strong>: {stats.get('max_drawdown', 0):.2%}", unsafe_allow_html=True)
+        else:
+            st.write(f"Final value: ${stats.get('final_value', 0):,.2f}")
+            st.write(f"Total return: {stats.get('total_return', 0):.2%}")
+            dd = stats.get('max_drawdown', 0.0)
+            st.write(f"Maximum drawdown: {dd:.2%}")
+            if dd < -0.2:
+                st.warning("This strategy had large losses during a stress period. Consider diversifying and using smaller position sizes.")
         st.markdown("---")
 
 
@@ -125,6 +191,75 @@ def render_quant_metrics(stats):
     display_metrics(stats)
     st.markdown("**Notes:**")
     st.write("Sharpe ratio measures risk-adjusted return. Max drawdown shows peak loss from a high point.")
+
+
+def render_risk_scatter(results_dict):
+    """Render a scatter plot of Sharpe vs Total Return for given result dict."""
+    import plotly.express as px
+    rows = []
+    for name, (sim, stats) in results_dict.items():
+        rows.append({
+            'strategy': name,
+            'total_return': stats.get('total_return', 0),
+            'sharpe_ratio': stats.get('sharpe_ratio', 0),
+            'max_drawdown': stats.get('max_drawdown', 0),
+        })
+    if not rows:
+        st.info('No results to visualize for risk metrics.')
+        return
+    df = pd.DataFrame(rows)
+    fig = px.scatter(df, x='sharpe_ratio', y='total_return', size=df['max_drawdown'].abs(), hover_name='strategy', title='Risk vs Return: Sharpe vs Total Return')
+    fig.update_layout(xaxis_title='Sharpe Ratio', yaxis_title='Total Return')
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def plot_inflation_vs_sp500(start_date, end_date, inflation_rate=0.02, index_ticker='SPY'):
+    """Plot a comparison of $1,000 invested in SP500 ETF vs cash losing value to inflation.
+
+    Uses a simple compounded inflation series at `inflation_rate` per year.
+    """
+    import yfinance as yf
+    try:
+        raw = yf.download(index_ticker, start=start_date, end=end_date)
+        if raw is None or raw.empty:
+            st.error('Unable to download index data for inflation comparison.')
+            return
+        prices = raw['Close'].dropna()
+    except Exception:
+        st.error('Error fetching index data for inflation comparison.')
+        return
+
+    # Normalize both to 1000 at start
+    prices = prices / prices.iloc[0] * 1000.0
+
+    # create inflation series assuming daily compounding
+    days = (prices.index - prices.index[0]).days
+    daily_rate = (1 + inflation_rate) ** (1/252) - 1
+    inflation = 1000.0 * ((1 + daily_rate) ** (range(len(prices))))
+    import numpy as np
+    inflation = 1000.0 * (1 + daily_rate) ** np.arange(len(prices))
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=prices.index, y=prices.values, name=f'{index_ticker} Value'))
+    fig.add_trace(go.Scatter(x=prices.index, y=inflation, name='Cash adjusted for inflation', line=dict(dash='dash')))
+    fig.update_layout(title='Inflation vs Market (starting $1000)', xaxis_title='Date', yaxis_title='Value ($)')
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def simulate_1000_from_date(data, start_invest_date):
+    """Return a series showing how $1,000 invested at start_invest_date would evolve using data['close']."""
+    if start_invest_date not in data.index:
+        # find next valid date
+        idx = data.index.searchsorted(start_invest_date)
+        if idx >= len(data.index):
+            return None
+        start_idx = idx
+    else:
+        start_idx = data.index.get_loc(start_invest_date)
+
+    series = data['close'].iloc[start_idx:]
+    rel = series / series.iloc[0] * 1000.0
+    return rel
 
 
 def render_investing_guide():
@@ -349,6 +484,50 @@ def render_resource_library():
     st.caption("These resources are suggestions, not endorsements. Always do your own research.")
 
 
+def render_ticker_discovery(default_ticker="AAPL"):
+    """Render a categorized ticker discovery UI in the sidebar and return the chosen ticker.
+
+    Provides three entry paths:
+    - Category: curated groups like Market Average, Tech Giants, Everyday Brands
+    - Risk Bucket: representative ETFs/stocks by risk profile
+    - Manual: free text ticker input for advanced users
+    """
+    st.sidebar.markdown("### Ticker Discovery")
+    pick_mode = st.sidebar.radio("Pick by", ["Category", "Risk Bucket", "Manual"], index=0)
+
+    categories = {
+        "The Market Average": ["VOO", "SPY", "VTI"],
+        "Tech Giants": ["AAPL", "MSFT", "GOOGL"],
+        "Everyday Brands": ["WMT", "KO", "PG"],
+    }
+
+    risk_buckets = {
+        "Slow & Steady": ["VOO", "VTI"],
+        "Balanced": ["VTI", "SPY"],
+        "High Growth": ["QQQ", "TSLA", "ARKK"],
+    }
+
+    if pick_mode == "Category":
+        cat = st.sidebar.selectbox("Category", list(categories.keys()))
+        ticker = st.sidebar.selectbox("Pick an example", categories[cat], index=0)
+    elif pick_mode == "Risk Bucket":
+        bucket = st.sidebar.selectbox("Risk Profile", list(risk_buckets.keys()))
+        use_full = st.sidebar.checkbox("Use full basket (recommended)", value=True)
+        if use_full:
+            # Return a comma-separated list which the data loader understands
+            ticker = ",".join(risk_buckets[bucket])
+        else:
+            ticker = st.sidebar.selectbox("Representative ETF/Stock", risk_buckets[bucket], index=0)
+    else:
+        ticker = st.sidebar.text_input("Stock Ticker", value=default_ticker)
+
+    # Provide a lightweight explanation for beginners
+    with st.sidebar.expander("Why these choices?"):
+        st.write("Curated groups help beginners discover sensible, diversified options instead of guessing tickers.")
+
+    return ticker
+
+
 __all__ = [
     'plot_equity_curve',
     'plot_drawdown',
@@ -359,4 +538,5 @@ __all__ = [
     'render_quant_metrics',
     'render_investing_guide',
     'render_resource_library',
+    'render_ticker_discovery',
 ]
