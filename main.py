@@ -1,14 +1,16 @@
 import subprocess
 import sys
 
-from data.data_manager import clean_price_data, download_market_data
 from backtest.engine import calculate_stats, run_simulation
+from data.data_manager import clean_price_data, download_market_data
 from strategies.benchmark import buy_hold_strategy
-from strategies.moving_average import moving_average_strategy
 from strategies.ml_predictor import ml_predictor_strategy
+from strategies.moving_average import moving_average_strategy
 
 
-def run_strategy_test(ticker, start_date, end_date, strategy_name, strategy_func, **kwargs):
+def run_strategy_test(
+    ticker, start_date, end_date, strategy_name, strategy_func, **kwargs
+):
     print(f"\n--- Testing {strategy_name} on {ticker} ---")
 
     raw = download_market_data(ticker, start_date, end_date)
@@ -33,7 +35,10 @@ def run_strategy_test(ticker, start_date, end_date, strategy_name, strategy_func
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--streamlit":
-        subprocess.run([sys.executable, "-m", "streamlit", "run", "ui/app_interface.py"], check=False)
+        subprocess.run(
+            [sys.executable, "-m", "streamlit", "run", "ui/app_interface.py"],
+            check=False,
+        )
         raise SystemExit
 
     ticker = input("Enter ticker (e.g., AAPL): ") or "AAPL"
@@ -76,9 +81,9 @@ if __name__ == "__main__":
 
         best = max(
             [
-                (ma_stats['total_return'], "Moving Average"),
-                (ml_stats['total_return'], "ML Predictor"),
-                (bh_stats['total_return'], "Buy & Hold"),
+                (ma_stats["total_return"], "Moving Average"),
+                (ml_stats["total_return"], "ML Predictor"),
+                (bh_stats["total_return"], "Buy & Hold"),
             ],
             key=lambda x: x[0],
         )

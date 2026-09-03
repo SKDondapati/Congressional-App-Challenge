@@ -1,6 +1,8 @@
 def buy_hold_strategy(data):
-    signals = data.copy()
-    signals['signal'] = 1
-    signals['position'] = 0
-    signals.loc[signals.index[0], 'position'] = 1
-    return signals
+    # everybody buys and holds
+    s = data.copy()
+    s["signal"] = 1
+    s["position"] = 0
+    # mark the first day as an entry
+    s.loc[s.index[0], "position"] = 1
+    return s
