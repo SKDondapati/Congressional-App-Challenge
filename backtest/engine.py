@@ -2,14 +2,59 @@ import numpy as np
 import pandas as pd
 
 
-def run_simulation(data, signals, starting_money=10000):
-    # simple sim: multiply daily returns under the strategy
+def run_simulation(data, signals, starting_money=10000, monthly_contribution=0):
+    # Simulate portfolio over time with optional monthly contributions.
+    # We iterate day-by-day and add contributions at the START of the first
+    # trading day of each month (before applying that day's return). This
+    # models contributions being invested immediately at the month's opening
+    # trading day.
     df = signals.copy()
-    df["daily_return"] = data["close"].pct_change().fillna(0)
-    # we use yesterday's signal to decide today's return
-    df["strategy_return"] = df["signal"].shift(1).fillna(0) * df["daily_return"]
-    df["portfolio_value"] = (1 + df["strategy_return"]).cumprod() * starting_money
-    df["buy_hold_value"] = (1 + df["daily_return"]).cumprod() * starting_money
+    df = df.reindex(data.index).copy()
+    daily_returns = data["close"].pct_change().fillna(0)
+
+    dates = list(df.index)
+    n = len(dates)
+    portfolio_vals = []
+    buy_hold_vals = []
+    strat_rets = []
+
+    value = float(starting_money)
+    bh_value = float(starting_money)
+
+    prev_month = dates[0].month if n > 0 else None
+
+    for i in range(n):
+        date = dates[i]
+        dr = float(daily_returns.iloc[i]) if i < len(daily_returns) else 0.0
+
+        # Decide today's position using yesterday's signal (keep previous behavior)
+        sig = 0.0
+        if i - 1 >= 0:
+            try:
+                sig = float(df["signal"].iloc[i - 1])
+            except Exception:
+                sig = 0.0
+
+
+        # Add monthly contribution on the first trading day of a new month (start of month)
+        if date.month != prev_month and i != 0:
+            value += float(monthly_contribution)
+            bh_value += float(monthly_contribution)
+            prev_month = date.month
+
+        strat_ret = sig * dr
+        value = value * (1 + strat_ret)
+        bh_value = bh_value * (1 + dr)
+
+        portfolio_vals.append(value)
+        buy_hold_vals.append(bh_value)
+        strat_rets.append(strat_ret)
+
+    df["daily_return"] = daily_returns
+    df["strategy_return"] = pd.Series(strat_rets, index=df.index)
+    df["portfolio_value"] = pd.Series(portfolio_vals, index=df.index)
+    df["buy_hold_value"] = pd.Series(buy_hold_vals, index=df.index)
+
     return df
 
 

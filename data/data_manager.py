@@ -52,19 +52,42 @@ def download_market_data_multi(tickers, start_date, end_date):
     # Concatenate on columns, align on index
     combined = pd.concat(dfs, axis=1)
 
-    # equal-weight average of closes, mean for prices, sum for volume
+    # Build an equal-weight portfolio using returns (not raw price averaging).
+    # Compute per-asset close returns, average those returns to get portfolio
+    # returns, then compound to a price series. This avoids bias from different
+    # share prices (e.g., AAPL vs BRK.A). Volume remains summed.
     close_cols = [c for c in combined.columns if c[1] == "close"]
-    close_df = combined[close_cols]
-    close_avg = close_df.mean(axis=1)
+    close_df = combined[close_cols].copy()
 
-    open_cols = [c for c in combined.columns if c[1] == "open"]
-    high_cols = [c for c in combined.columns if c[1] == "high"]
-    low_cols = [c for c in combined.columns if c[1] == "low"]
+    # pct_change will produce NaN for the first row; compute returns and drop NaNs
+    returns = close_df.pct_change()
+    returns = returns.dropna(how="all")
+
+    if returns.empty:
+        # fallback to simple mean if returns can't be computed
+        close_series = close_df.mean(axis=1)
+    else:
+        # portfolio returns: equal-weight average of asset returns
+        portfolio_returns = returns.mean(axis=1)
+
+        # use the mean of the first available closes as a sensible starting value
+        first_closes = close_df.iloc[0].mean()
+
+        # compound returns to get portfolio close prices; align index to include first date
+        compounded = (1 + portfolio_returns).cumprod()
+        compounded.index = portfolio_returns.index
+        # prepend the initial value at the first close date
+        first_date = close_df.index[0]
+        close_series = pd.Series([first_closes], index=[first_date]).append(
+            first_closes * compounded
+        )
+
+    # For simplicity and consistency, set OHLC to the portfolio close series.
+    open_avg = close_series.copy()
+    high_avg = close_series.copy()
+    low_avg = close_series.copy()
+
     vol_cols = [c for c in combined.columns if c[1] == "volume"]
-
-    open_avg = combined[open_cols].mean(axis=1)
-    high_avg = combined[high_cols].mean(axis=1)
-    low_avg = combined[low_cols].mean(axis=1)
     vol_sum = combined[vol_cols].sum(axis=1)
 
     out = pd.DataFrame(
@@ -72,7 +95,7 @@ def download_market_data_multi(tickers, start_date, end_date):
             "open": open_avg,
             "high": high_avg,
             "low": low_avg,
-            "close": close_avg,
+            "close": close_series,
             "volume": vol_sum,
         }
     )

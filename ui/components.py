@@ -153,6 +153,51 @@ def render_shock_card(stats, strategy_name):
         )
 
 
+def render_concept_card(title, value=None, simple="", example="", quant="", calculation=None, so_what=None, key=None):
+    """Render a four-part explanation card: Simple / Example / Quant / So what?
+
+    Use emojis to make the sections friendly for beginners.
+    """
+    header = title
+    if value is not None:
+        header = f"{title} — {value}"
+    st.markdown(f"### {header}")
+    with st.expander("Explain this"):
+        st.markdown("**💡 Simple**")
+        st.write(simple)
+
+        st.markdown("**🧮 Example**")
+        st.write(example)
+
+        st.markdown("**📐 Quant**")
+        st.write(quant)
+
+        if calculation:
+            # Build a base key from provided key or sanitized title
+            base = f"show_calc_{str(key)}" if key else f"show_calc_{title.replace(' ', '_')[:40]}"
+            # Ensure uniqueness across this Streamlit session by tracking used keys
+            used = st.session_state.get("_used_widget_keys", [])
+            candidate = base
+            i = 1
+            while candidate in used:
+                candidate = f"{base}_{i}"
+                i += 1
+            # record it so subsequent cards won't collide
+            used.append(candidate)
+            st.session_state["_used_widget_keys"] = used
+            if st.checkbox("Show calculation", key=candidate):
+                st.code(calculation)
+
+        # So what? — render caller-provided concise takeaway when available
+        st.markdown("**🎯 So what?**")
+        if so_what:
+            st.write(so_what)
+        else:
+            st.write(
+                "This metric helps you understand tradeoffs. Use the example and quant sections for details."
+            )
+
+
 def render_educational_footer():
     st.divider()
     st.subheader("🧠 Algorithmic Literacy Takeaways")
