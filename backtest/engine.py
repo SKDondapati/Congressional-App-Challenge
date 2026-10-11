@@ -2,91 +2,143 @@ import numpy as np
 import pandas as pd
 
 
-def run_simulation(data, signals, starting_money=10000, monthly_contribution=0):
-    # Simulate portfolio over time with optional monthly contributions.
-    # We iterate day-by-day and add contributions at the START of the first
-    # trading day of each month (before applying that day's return). This
-    # models contributions being invested immediately at the month's opening
-    # trading day.
-    df = signals.copy()
-    df = df.reindex(data.index).copy()
-    daily_returns = data["close"].pct_change().fillna(0)
+def run_simulation(
+    data,
+    signals,
+    starting_money=10000,
+    monthly_contribution=0,
+    start_date=None,
+):
+    """Simulate long-only signals; a signal is applied to the next day's return.
 
-    dates = list(df.index)
-    n = len(dates)
-    portfolio_vals = []
-    buy_hold_vals = []
-    strat_rets = []
+    Contributions are added before returns on the first trading day of each
+    month after the simulation starts. ``start_date`` lets strategies share an
+    evaluation window while still using the prior close to calculate returns.
+    """
+    if starting_money < 0 or monthly_contribution < 0:
+        raise ValueError("Starting money and monthly contributions cannot be negative.")
 
-    value = float(starting_money)
-    bh_value = float(starting_money)
+    if data is None or data.empty:
+        return pd.DataFrame(
+            columns=[
+                "daily_return",
+                "strategy_return",
+                "contribution",
+                "performance_index",
+                "portfolio_value",
+                "buy_hold_value",
+            ]
+        )
+    if "close" not in data.columns:
+        raise ValueError("Price data must include a 'close' column.")
 
-    prev_month = dates[0].month if n > 0 else None
+    prices = pd.to_numeric(data["close"], errors="coerce")
+    valid = prices.notna() & np.isfinite(prices) & (prices > 0)
+    prices = prices.loc[valid]
+    prices = prices.loc[~prices.index.duplicated(keep="last")].sort_index()
+    if prices.empty:
+        raise ValueError("Price data must include at least one positive closing price.")
 
-    for i in range(n):
-        date = dates[i]
-        dr = float(daily_returns.iloc[i]) if i < len(daily_returns) else 0.0
+    aligned_signals = signals.reindex(prices.index)
+    if "signal" not in aligned_signals.columns:
+        aligned_signals["signal"] = 0.0
+    positions = pd.to_numeric(aligned_signals["signal"], errors="coerce")
+    positions = positions.fillna(0.0).shift(1).fillna(0.0)
 
-        # Decide today's position using yesterday's signal (keep previous behavior)
-        sig = 0.0
-        if i - 1 >= 0:
-            try:
-                sig = float(df["signal"].iloc[i - 1])
-            except Exception:
-                sig = 0.0
+    all_returns = prices.pct_change(fill_method=None).fillna(0.0)
+    if start_date is not None:
+        start_date = pd.to_datetime(start_date)
+        selected_dates = prices.index[prices.index >= start_date]
+    else:
+        selected_dates = prices.index
 
+    if len(selected_dates) == 0:
+        return pd.DataFrame(index=selected_dates)
 
-        # Add monthly contribution on the first trading day of a new month (start of month)
-        if date.month != prev_month and i != 0:
-            value += float(monthly_contribution)
-            bh_value += float(monthly_contribution)
-            prev_month = date.month
+    results = pd.DataFrame(index=selected_dates)
+    results["daily_return"] = all_returns.reindex(selected_dates).fillna(0.0)
+    results["strategy_return"] = (
+        positions.reindex(selected_dates).fillna(0.0)
+        * results["daily_return"]
+    )
 
-        strat_ret = sig * dr
-        value = value * (1 + strat_ret)
-        bh_value = bh_value * (1 + dr)
+    contributions = []
+    previous_month = (selected_dates[0].year, selected_dates[0].month)
+    for date in selected_dates:
+        current_month = (date.year, date.month)
+        contribution = 0.0
+        if current_month != previous_month:
+            contribution = float(monthly_contribution)
+            previous_month = current_month
+        contributions.append(contribution)
+    results["contribution"] = contributions
+    results["total_contributions"] = (
+        float(starting_money) + results["contribution"].cumsum()
+    )
 
-        portfolio_vals.append(value)
-        buy_hold_vals.append(bh_value)
-        strat_rets.append(strat_ret)
+    portfolio_values = []
+    benchmark_values = []
+    performance_values = []
+    account_value = float(starting_money)
+    benchmark_value = float(starting_money)
+    performance_value = 1.0
 
-    df["daily_return"] = daily_returns
-    df["strategy_return"] = pd.Series(strat_rets, index=df.index)
-    df["portfolio_value"] = pd.Series(portfolio_vals, index=df.index)
-    df["buy_hold_value"] = pd.Series(buy_hold_vals, index=df.index)
+    for date in selected_dates:
+        account_value += results.at[date, "contribution"]
+        account_value *= 1 + results.at[date, "strategy_return"]
+        benchmark_value += results.at[date, "contribution"]
+        benchmark_value *= 1 + results.at[date, "daily_return"]
+        performance_value *= 1 + results.at[date, "strategy_return"]
+        portfolio_values.append(account_value)
+        benchmark_values.append(benchmark_value)
+        performance_values.append(performance_value)
 
-    return df
+    results["performance_index"] = performance_values
+    results["portfolio_value"] = portfolio_values
+    results["buy_hold_value"] = benchmark_values
+    return results
 
 
 def calculate_stats(results, risk_free_rate=0.0):
-    # return some basic stats; keep it dumb and understandable
+    """Summarize time-weighted performance (risk-free rate is annualized)."""
     if results is None or results.empty:
         return {
             "final_value": 0.0,
             "total_return": 0.0,
+            "total_contributions": 0.0,
             "sharpe_ratio": 0.0,
             "max_drawdown": 0.0,
+            "annualized_volatility": 0.0,
         }
 
-    fv = results["portfolio_value"].iloc[-1]
-    sv = results["portfolio_value"].iloc[0]
-    tr = fv / sv - 1 if sv != 0 else 0.0
+    fv = float(results["portfolio_value"].iloc[-1])
+    if "total_contributions" in results:
+        total_contributions = float(results["total_contributions"].iloc[-1])
+    else:
+        total_contributions = 0.0
 
-    rets = results["strategy_return"].fillna(0)
+    rets = results["strategy_return"].fillna(0.0)
+    tr = float((1 + rets).prod() - 1)
     if len(rets) < 2 or rets.std(ddof=1) == 0:
         sr = 0.0
     else:
-        # simple annualized sharpe using 252 trading days
         excess = rets - risk_free_rate / 252
         sr = np.sqrt(252) * excess.mean() / excess.std(ddof=1)
 
-    cm = results["portfolio_value"].cummax()
-    dd = (results["portfolio_value"] - cm) / cm
+    if "performance_index" in results:
+        performance = results["performance_index"]
+    else:
+        performance = results["portfolio_value"]
+    cm = performance.cummax()
+    dd = performance.div(cm).sub(1)
     md = dd.min() if not dd.empty else 0.0
+    volatility = float(rets.std(ddof=1) * np.sqrt(252)) if len(rets) > 1 else 0.0
 
     return {
         "final_value": float(fv),
         "total_return": float(tr),
+        "total_contributions": total_contributions,
         "sharpe_ratio": float(sr),
         "max_drawdown": float(md),
+        "annualized_volatility": volatility,
     }

@@ -1,62 +1,73 @@
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.preprocessing import StandardScaler
 
 
 def ml_predictor_strategy(data, lookback=5, test_size=0.2):
-    # a quick ML-based signal generator using previous windows
-    if data is None or data.empty:
-        return data.copy() if data is not None else pd.DataFrame()
+    """Predict next-day direction on a chronological holdout period.
 
-    d = data.copy()
-    d["returns_1d"] = d["close"].pct_change()
-    d["returns_5d"] = d["close"].pct_change(periods=max(lookback, 5))
-    d["volume_change"] = d["volume"].pct_change()
-    d["momentum"] = d["close"] - d["close"].shift(lookback)
-    d["volatility"] = (
-        d["returns_1d"].rolling(window=max(10, lookback), min_periods=1).std()
+    Signals before the holdout are zero. A prediction is made after that day's
+    close and is therefore applied to the following trading day's return.
+    """
+    if lookback < 1:
+        raise ValueError("Lookback must be positive.")
+    if not 0 < test_size < 1:
+        raise ValueError("test_size must be between 0 and 1.")
+    if data is None:
+        return pd.DataFrame(columns=["signal", "position", "evaluation_prediction"])
+
+    signals = data.copy()
+    signals["signal"] = 0
+    signals["evaluation_prediction"] = False
+    if signals.empty:
+        signals["position"] = 0
+        return signals
+    if "close" not in signals.columns:
+        raise ValueError("Price data must include a 'close' column.")
+
+    close = pd.to_numeric(signals["close"], errors="coerce")
+    volume = signals.get("volume", pd.Series(1.0, index=signals.index))
+    high = signals.get("high", close)
+    low = signals.get("low", close)
+    features = pd.DataFrame(index=signals.index)
+    features["returns_1d"] = close.pct_change(fill_method=None)
+    features["returns_lookback"] = close.pct_change(
+        periods=max(lookback, 5), fill_method=None
     )
-    d["high_low_ratio"] = d["high"] / d["low"]
-    d["target"] = (d["close"].shift(-1) > d["close"]).astype(int)
+    features["volume_change"] = pd.to_numeric(
+        volume, errors="coerce"
+    ).pct_change(fill_method=None)
+    features["momentum"] = close - close.shift(lookback)
+    volatility_window = max(10, lookback)
+    features["volatility"] = features["returns_1d"].rolling(
+        volatility_window, min_periods=volatility_window
+    ).std()
+    features["high_low_ratio"] = pd.to_numeric(
+        high, errors="coerce"
+    ) / pd.to_numeric(low, errors="coerce")
+    features = features.replace([np.inf, -np.inf], np.nan).dropna()
 
-    d = d.dropna().copy()
-    if len(d) < 50:
-        s = data.copy()
-        s["signal"] = 0
-        s["position"] = 0
-        return s
+    next_close = close.shift(-1)
+    labels = next_close.gt(close).where(next_close.notna()).reindex(features.index)
+    known_label = labels.notna()
+    features = features.loc[known_label]
+    labels = labels.loc[known_label].astype(int)
+    if len(features) < 50:
+        signals["position"] = signals["signal"].diff().fillna(0)
+        return signals
 
-    cols = [
-        "returns_1d",
-        "returns_5d",
-        "volume_change",
-        "momentum",
-        "volatility",
-        "high_low_ratio",
-    ]
-    X = d[cols].to_numpy(dtype=float)
-    y = d["target"].to_numpy(dtype=int)
+    split = max(30, int(len(features) * (1 - test_size)))
+    if split >= len(features):
+        signals["position"] = signals["signal"].diff().fillna(0)
+        return signals
 
-    s = data.copy()
-    s["signal"] = 0
-
-    min_train_rows = max(30, int(len(d) * (1 - test_size)))
-    for i in range(min_train_rows, len(d)):
-        train_X = X[:i]
-        train_y = y[:i]
-        if len(train_X) < 30:
-            continue
-
-        scaler = StandardScaler()
-        tX = scaler.fit_transform(train_X)
-        model = RandomForestClassifier(n_estimators=100, max_depth=8, random_state=42)
-        model.fit(tX, train_y)
-
-        curX = X[i : i + 1]
-        pred = model.predict(scaler.transform(curX))[0]
-        if d.index[i] in s.index:
-            s.loc[d.index[i], "signal"] = int(pred)
-
-    s["position"] = s["signal"].diff().fillna(0)
-    return s
+    model = RandomForestClassifier(
+        n_estimators=100, max_depth=8, random_state=42, class_weight="balanced"
+    )
+    model.fit(features.iloc[:split], labels.iloc[:split])
+    test_features = features.iloc[split:]
+    predictions = model.predict(test_features)
+    signals.loc[test_features.index, "signal"] = predictions
+    signals.loc[test_features.index, "evaluation_prediction"] = True
+    signals["position"] = signals["signal"].diff().fillna(0)
+    return signals

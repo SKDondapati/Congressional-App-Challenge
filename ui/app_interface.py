@@ -10,18 +10,32 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from backtest.engine import calculate_stats, run_simulation
-from data.data_manager import (clean_price_data, download_market_data,
-                               download_market_data_multi)
+from analysis.comparison import compare_results
+from data.data_manager import (
+    MarketDataError,
+    clean_price_data,
+    download_market_data,
+    download_market_data_multi,
+)
 from strategies.benchmark import buy_hold_strategy
 from strategies.ml_predictor import ml_predictor_strategy
 from strategies.moving_average import moving_average_strategy
-from ui.components import (display_metrics, plot_drawdown, plot_equity_curve,
-                           plot_inflation_vs_sp500,
-                           render_beginner_explanation,
-                           render_educational_footer, render_investing_guide,
-                           render_quant_metrics, render_resource_library,
-                           render_risk_scatter, render_shock_card,
-                           render_ticker_discovery, simulate_1000_from_date)
+from ui.charts import (
+    plot_drawdown,
+    plot_equity_curve,
+    plot_inflation_vs_sp500,
+    render_risk_scatter,
+    simulate_1000_from_date,
+)
+from ui.components import (
+    display_metrics,
+    render_beginner_explanation,
+    render_educational_footer,
+    render_quant_metrics,
+    render_shock_card,
+    render_ticker_discovery,
+)
+from ui.education import render_investing_guide, render_resource_library
 from ui.explain_mode import show_metric_explainers
 from ui.i18n import t
 from ui.experiment import ExperimentConfig
@@ -41,26 +55,23 @@ def generate_insights(stats, results=None, starting_amount=None):
     md = stats.get("max_drawdown")
     sr = stats.get("sharpe_ratio")
 
-    # 1: dollar change
-    try:
-        if fv is not None and sv is not None:
-            change = fv - sv
-            try:
-                insights.append(f"Your investment changed by ${int(change):,} (final ${int(fv):,}).")
-            except Exception:
-                insights.append(f"Your investment changed by {change} (final {fv}).")
-    except Exception:
-        pass
+    if fv is not None and stats.get("total_contributions") is not None:
+        contributed = stats["total_contributions"]
+        insights.append(
+            f"The account ended at ${fv:,.2f} after ${contributed:,.2f} was contributed."
+        )
 
     # 2: return vs drawdown
     if tr is not None and md is not None:
         insights.append(
-            f"Historical total return: {tr:.2%} with a worst drawdown of {md:.2%}. This shows return and risk together."
+            f"Time-weighted investment return, excluding deposits, was {tr:.2%}; worst drawdown was {md:.2%}."
         )
 
     # 3: Sharpe or volatility hint
     if sr is not None:
-        insights.append(f"Sharpe ratio was {sr:.2f}; higher values indicate better risk-adjusted returns.")
+        insights.append(
+            f"Sharpe ratio was {sr:.2f}; it summarizes return relative to daily variability, but does not decide which investment is right for you."
+        )
 
     # limit to 3 insights
     return insights[:3]
@@ -76,6 +87,15 @@ def safe_rerun():
     except Exception:
         # If rerun isn't available, do nothing
         return
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_market_data(ticker, start_date, end_date):
+    if "," in ticker:
+        raw = download_market_data_multi(ticker, start_date, end_date)
+    else:
+        raw = download_market_data(ticker, start_date, end_date)
+    return clean_price_data(raw)
 
 # --- Sidebar ---
 st.sidebar.title("QuantLit")
@@ -139,7 +159,7 @@ if page == "Backtest Simulator":
     with st.sidebar.expander("ⓘ Simulation assumptions", expanded=False):
         st.markdown(
             """
-        - Contributions are applied at the start of the first trading day of each month (invested immediately).
+        - Contributions are added before returns on the first trading day of each later month in the selected period.
         - No transaction costs or fees are modeled.
         - Dividends are included only if present in the price series used (Close prices may already reflect total return in ETF data).
         - Returns are nominal (not inflation-adjusted) unless you adjust inputs externally.
@@ -151,6 +171,12 @@ if page == "Backtest Simulator":
         "Select Strategy",
         ["Moving Average (20/50)", "ML Predictor", "Buy & Hold", "Compare All"],
     )
+    if mode == "Beginner Mode" and strategy_choice == "Compare All":
+        st.sidebar.selectbox(
+            "Before the results: which strategy will have the largest drawdown?",
+            ["Moving Average", "ML Predictor", "Buy & Hold"],
+            key="risk_prediction",
+        )
 
     if mode == "Quant Mode":
         short_window = (
@@ -200,34 +226,26 @@ if page == "Backtest Simulator":
                 end_dt = pd.to_datetime(end_date)
                 start_date = end_dt - pd.DateOffset(years=int(horizon_years))
 
-            if isinstance(ticker, (list, tuple)):
-                raw = download_market_data_multi(
-                    ticker,
-                    start_date.strftime("%Y-%m-%d"),
-                    end_date.strftime("%Y-%m-%d"),
-                )
-            elif isinstance(ticker, str) and "," in ticker:
-                raw = download_market_data_multi(
-                    ticker,
-                    start_date.strftime("%Y-%m-%d"),
-                    end_date.strftime("%Y-%m-%d"),
-                )
-            else:
-                raw = download_market_data(
-                    ticker,
-                    start_date.strftime("%Y-%m-%d"),
-                    end_date.strftime("%Y-%m-%d"),
-                )
-            if raw is None or raw.empty:
-                st.error(
-                    "No data found for that ticker. Please check the symbol and dates."
-                )
+            if start_date > end_date:
+                st.error("Start date must be on or before end date.")
                 st.stop()
-            data = clean_price_data(raw)
+            ticker = ",".join(ticker) if isinstance(ticker, (list, tuple)) else ticker
+            try:
+                data = load_market_data(
+                    ticker,
+                    start_date.strftime("%Y-%m-%d"),
+                    end_date.strftime("%Y-%m-%d"),
+                )
+            except MarketDataError as error:
+                st.error(str(error))
+                st.stop()
             if mode == "Beginner Mode":
                 st.success(f"Loaded {len(data)} days of data for {ticker}.")
             else:
                 st.success(f"Loaded {len(data)} trading days.")
+            if len(data) < 2:
+                st.error("At least two valid closing prices are needed for a backtest.")
+                st.stop()
 
         if strategy_choice == "Compare All":
             strategies = {
@@ -241,13 +259,58 @@ if page == "Backtest Simulator":
                 ),
                 "Buy & Hold": (buy_hold_strategy, {}),
             }
+            ml_signals = ml_predictor_strategy(data)
+            prediction_dates = ml_signals.index[
+                ml_signals["evaluation_prediction"]
+            ]
+            evaluation_start = None
+            if len(prediction_dates) > 0:
+                first_prediction = data.index.get_loc(prediction_dates[0])
+                if first_prediction + 1 < len(data):
+                    evaluation_start = data.index[first_prediction + 1]
+            if evaluation_start is None:
+                st.warning(
+                    "There is not enough history for an out-of-sample ML test. "
+                    "The ML result is excluded from this comparison."
+                )
+                strategies.pop("ML Predictor")
+
             results_dict = {}
             for name, (func, kwargs) in strategies.items():
                 with st.spinner(f"Running {name}..."):
-                    signals = func(data, **kwargs) if kwargs else func(data)
-                    sim = run_simulation(data, signals, starting_money=starting_amount, monthly_contribution=monthly_contribution)
+                    if name == "ML Predictor":
+                        signals = ml_signals
+                    else:
+                        signals = func(data, **kwargs) if kwargs else func(data)
+                    sim = run_simulation(
+                        data,
+                        signals,
+                        starting_money=starting_amount,
+                        monthly_contribution=monthly_contribution,
+                        start_date=evaluation_start,
+                    )
                     stats = calculate_stats(sim)
                     results_dict[name] = (sim, stats)
+
+            st.subheader("Same-period results")
+            st.dataframe(compare_results(results_dict), hide_index=True)
+
+            if mode == "Beginner Mode" and len(results_dict) > 1:
+                actual_riskiest = max(
+                    results_dict,
+                    key=lambda name: abs(results_dict[name][1]["max_drawdown"]),
+                )
+                prediction = st.session_state.get("risk_prediction")
+                if prediction == actual_riskiest:
+                    st.success(
+                        f"Your prediction was right: {actual_riskiest} had the largest "
+                        "historical drawdown in this test period."
+                    )
+                else:
+                    st.info(
+                        f"In this test period, {actual_riskiest} had the largest "
+                        "historical drawdown. A different date range can change the result."
+                    )
 
             if mode == "Beginner Mode":
                 st.subheader("How did each strategy perform?")
@@ -288,6 +351,56 @@ if page == "Backtest Simulator":
             )
             # show the comparison chart
             st.plotly_chart(fig, width="stretch")
+
+            if mode == "Beginner Mode" and "Buy & Hold" in results_dict:
+                st.subheader("What if the market drops?")
+                st.caption(
+                    "This uses the largest actual buy-and-hold decline in the "
+                    "selected test period. It is one historical example, not a forecast."
+                )
+                benchmark_results = results_dict["Buy & Hold"][0]
+                benchmark_path = benchmark_results["performance_index"]
+                benchmark_drawdown = benchmark_path / benchmark_path.cummax() - 1
+                trough_date = benchmark_drawdown.idxmin()
+                trough_position = benchmark_results.index.get_loc(trough_date)
+                if trough_position > 0 and benchmark_drawdown.loc[trough_date] < 0:
+                    through_trough = benchmark_path.iloc[: trough_position + 1]
+                    peak_date = through_trough.idxmax()
+                    strategy_names = list(results_dict)
+                    pair_columns = st.columns(2)
+                    with pair_columns[0]:
+                        first_strategy = st.selectbox(
+                            "First strategy",
+                            strategy_names,
+                            key="drawdown_strategy_one",
+                        )
+                    with pair_columns[1]:
+                        second_strategy = st.selectbox(
+                            "Second strategy",
+                            strategy_names,
+                            index=min(1, len(strategy_names) - 1),
+                            key="drawdown_strategy_two",
+                        )
+
+                    outcomes = {}
+                    for name in [first_strategy, second_strategy]:
+                        period_returns = results_dict[name][0].loc[
+                            peak_date:trough_date, "strategy_return"
+                        ]
+                        outcomes[name] = float(
+                            1000 * (1 + period_returns).prod()
+                        )
+                    st.write(
+                        f"Observed decline: {peak_date.date()} to {trough_date.date()} "
+                        f"({benchmark_drawdown.loc[trough_date]:.1%})."
+                    )
+                    st.write(
+                        f"A $1,000 starting balance ended at "
+                        f"${outcomes[first_strategy]:,.2f} with {first_strategy} "
+                        f"and ${outcomes[second_strategy]:,.2f} with {second_strategy}."
+                    )
+                else:
+                    st.info("No market decline occurred in the selected test period.")
 
             if mode == "Quant Mode":
                 render_educational_footer()
@@ -368,7 +481,29 @@ if page == "Backtest Simulator":
 
             with st.spinner(f"Running {name}..."):
                 signals = func(data, **kwargs) if kwargs else func(data)
-                results = run_simulation(data, signals, starting_money=starting_amount, monthly_contribution=monthly_contribution)
+                evaluation_start = None
+                if strategy_choice == "ML Predictor":
+                    prediction_dates = signals.index[
+                        signals["evaluation_prediction"]
+                    ]
+                    if len(prediction_dates) == 0:
+                        st.warning(
+                            "There is not enough history for an out-of-sample ML test. "
+                            "Choose another strategy or a longer date range."
+                        )
+                        st.stop()
+                    first_prediction = data.index.get_loc(prediction_dates[0])
+                    if first_prediction + 1 >= len(data):
+                        st.warning("There are no trading days after the ML test begins.")
+                        st.stop()
+                    evaluation_start = data.index[first_prediction + 1]
+                results = run_simulation(
+                    data,
+                    signals,
+                    starting_money=starting_amount,
+                    monthly_contribution=monthly_contribution,
+                    start_date=evaluation_start,
+                )
                 stats = calculate_stats(results)
                 # record experiment summary in session history
                 ex_hist = st.session_state.get("experiments", [])
@@ -397,13 +532,20 @@ if page == "Backtest Simulator":
                 sv = float(starting_amount)
                 fv = float(stats.get("final_value", 0.0))
                 tr = stats.get("total_return", 0.0)
-                st.markdown(f"### ${sv:,.0f} → ${fv:,.0f} ({tr:.2%})")
+                contributed = stats.get("total_contributions", sv)
+                st.markdown(f"### ${contributed:,.0f} contributed → ${fv:,.0f}")
+                st.write(f"Investment return, excluding deposits: {tr:.2%}")
                 st.caption("This is a historical simulation, not a prediction of future performance.")
 
                 # Show Data
                 with st.expander("Show the data (yearly returns)"):
                     try:
-                        yearly = results["portfolio_value"].resample("Y").last().pct_change().dropna()
+                        yearly = (
+                            (1 + results["strategy_return"])
+                            .resample("YE")
+                            .prod()
+                            .sub(1)
+                        )
                         df_yearly = yearly.to_frame(name="annual_return")
                         df_yearly["annual_return"] = df_yearly["annual_return"].map(lambda x: f"{x:.2%}")
                         st.table(df_yearly)
@@ -417,8 +559,8 @@ if page == "Backtest Simulator":
                         days = (results.index[-1] - results.index[0]).days
                         years = days / 365.25 if days > 0 else 1
                         cagr = (fv / sv) ** (1 / years) - 1 if sv > 0 else 0.0
-                        st.markdown("**Total return** = (final / start) - 1")
-                        st.markdown("**CAGR** = (final / start)^(1 / years) - 1")
+                        st.markdown("**Investment return** = product(1 + daily strategy return) - 1")
+                        st.markdown("**CAGR** = (1 + investment return)^(1 / years) - 1")
                         st.write(f"Years: {years:.1f}")
                         st.write(f"CAGR: {cagr:.2%}")
                     except Exception:
@@ -588,11 +730,12 @@ if page == "Backtest Simulator":
                             if res is None:
                                 return None
                             try:
-                                sv = res["portfolio_value"].iloc[0]
-                                fv = res["portfolio_value"].iloc[-1]
+                                total_return = entry.get("stats", {}).get("total_return")
                                 days = (res.index[-1] - res.index[0]).days
                                 years = days / 365.25 if days > 0 else 1
-                                return (fv / sv) ** (1 / years) - 1
+                                if total_return is None or total_return <= -1:
+                                    return None
+                                return (1 + total_return) ** (1 / years) - 1
                             except Exception:
                                 return None
 
@@ -657,7 +800,7 @@ if page == "Backtest Simulator":
             goals = [
                 (t("Grow money over time"), t("See how compounding works"), "VTI"),
                 (t("Understand risk"), t("See drawdowns and stress tests"), "VOO"),
-                (t("Compare investments"), t("Compare cash, stocks, real estate"), "VTI"),
+                (t("Compare investments"), t("Compare investment strategies"), "VTI"),
             ]
             for i, (title_g, desc, suggestion) in enumerate(goals):
                 with cols[i]:
@@ -743,7 +886,7 @@ elif page == "Methodology":
         )
     with st.expander("Contribution timing"):
         st.markdown(
-            "Monthly contributions are applied at the start of the first trading day of each month (before that day's return) so they are invested immediately for that day."
+            "Monthly contributions are added before returns on the first trading day of each later month in the selected period. The initial balance is present on the first selected date."
         )
     with st.expander("Fees & taxes"):
         st.markdown(
@@ -751,7 +894,7 @@ elif page == "Methodology":
         )
     with st.expander("Nominal vs Real returns"):
         st.markdown(
-            "Results are nominal (not inflation-adjusted) by default. Use the inflation comparison tool to estimate real returns."
+            "Results are nominal (not inflation-adjusted) by default. The comparison chart uses an example 2% inflation assumption, not actual inflation for the selected dates."
         )
     with st.expander("Missing data & alignment"):
         st.markdown(
