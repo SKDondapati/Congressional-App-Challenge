@@ -226,7 +226,7 @@ if page == "Backtest Simulator":
                 end_dt = pd.to_datetime(end_date)
                 start_date = end_dt - pd.DateOffset(years=int(horizon_years))
 
-            if start_date > end_date:
+            if pd.Timestamp(start_date) > pd.Timestamp(end_date):
                 st.error("Start date must be on or before end date.")
                 st.stop()
             ticker = ",".join(ticker) if isinstance(ticker, (list, tuple)) else ticker
