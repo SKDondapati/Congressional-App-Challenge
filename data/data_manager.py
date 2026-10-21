@@ -26,8 +26,10 @@ def _validate_request(ticker, start_date, end_date):
 def download_market_data(ticker, start_date, end_date):
     _validate_request(ticker, start_date, end_date)
     try:
+        # yfinance treats its end argument as exclusive; include the selected date.
+        inclusive_end = pd.to_datetime(end_date) + pd.Timedelta(days=1)
         data = yf.download(
-            ticker.strip(), start=start_date, end=end_date, progress=False
+            ticker.strip(), start=start_date, end=inclusive_end, progress=False
         )
         if data is None or data.empty:
             raise MarketDataError(
@@ -72,9 +74,10 @@ def clean_price_data(raw_df):
 
     for name in ["open", "high", "low", "volume"]:
         if name not in df.columns:
-            df[name] = df["close"] if name != "volume" else 0.0
+            df[name] = float("nan")
         else:
             df[name] = pd.to_numeric(df[name], errors="coerce")
+            df[name] = df[name].replace([float("inf"), -float("inf")], float("nan"))
     return df[["open", "high", "low", "close", "volume"]]
 
 
@@ -111,7 +114,7 @@ def download_market_data_multi(tickers, start_date, end_date):
     if not dfs:
         raise MarketDataError("No usable data was found for the selected tickers.")
 
-    # Concatenate on columns, align on index
+    # Keep dates shared by every selected asset so weights do not silently change.
     combined = pd.concat(dfs, axis=1)
 
     # Build an equal-weight portfolio using returns (not raw price averaging).
@@ -120,31 +123,19 @@ def download_market_data_multi(tickers, start_date, end_date):
     # share prices (e.g., AAPL vs BRK.A). Volume remains summed.
     close_cols = [c for c in combined.columns if c[1] == "close"]
     close_df = combined[close_cols].copy()
+    common_closes = close_df.dropna(how="any")
+    if common_closes.empty:
+        raise MarketDataError("The selected tickers have no shared dates with valid prices.")
 
-    # pct_change will produce NaN for the first row; compute returns and drop NaNs
-    returns = close_df.pct_change(fill_method=None)
-    returns = returns.dropna(how="all")
-
-    if returns.empty:
-        # fallback to simple mean if returns can't be computed
-        close_series = close_df.mean(axis=1)
-    else:
-        # portfolio returns: equal-weight average of asset returns
-        portfolio_returns = returns.mean(axis=1)
-
-        # use the mean of the first available closes as a sensible starting value
-        first_closes = close_df.iloc[0].mean()
-
-        # compound returns to get portfolio close prices; align index to include first date
-        compounded = (1 + portfolio_returns).cumprod()
-        compounded.index = portfolio_returns.index
-        # prepend the initial value at the first close date
-        first_date = close_df.index[0]
-        later_closes = first_closes * compounded
-        later_closes = later_closes.loc[later_closes.index != first_date]
-        close_series = pd.concat(
-            [pd.Series([first_closes], index=[first_date]), later_closes]
-        )
+    # Start at the first shared close, then compound equal-weight daily returns.
+    portfolio_returns = common_closes.pct_change(fill_method=None).mean(axis=1)
+    first_date = common_closes.index[0]
+    first_value = float(common_closes.iloc[0].mean())
+    later_returns = portfolio_returns.loc[portfolio_returns.index > first_date]
+    later_closes = first_value * (1 + later_returns).cumprod()
+    close_series = pd.concat(
+        [pd.Series([first_value], index=[first_date]), later_closes]
+    )
 
     # For simplicity and consistency, set OHLC to the portfolio close series.
     open_avg = close_series.copy()
@@ -152,7 +143,7 @@ def download_market_data_multi(tickers, start_date, end_date):
     low_avg = close_series.copy()
 
     vol_cols = [c for c in combined.columns if c[1] == "volume"]
-    vol_sum = combined[vol_cols].sum(axis=1)
+    vol_sum = combined.loc[close_series.index, vol_cols].sum(axis=1, min_count=1)
 
     out = pd.DataFrame(
         {
@@ -164,5 +155,4 @@ def download_market_data_multi(tickers, start_date, end_date):
         }
     )
 
-    out = out.dropna()
-    return out
+    return out.dropna(subset=["close"])

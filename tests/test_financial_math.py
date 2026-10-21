@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import pytest
 from backtest.engine import run_simulation, calculate_stats
 
 
@@ -101,8 +102,52 @@ def test_empty_simulation_returns_zero_stats():
     stats = calculate_stats(run_simulation(pd.DataFrame(), pd.DataFrame()))
 
     assert stats["final_value"] == 0
-    assert stats["total_return"] == 0
+    assert stats["total_return"] is None
     assert stats["total_contributions"] == 0
+    assert stats["annualized_return"] is None
+    assert stats["max_drawdown"] is None
+    assert stats["sharpe_ratio"] is None
+
+
+def test_annualized_return_uses_time_weighted_returns_not_account_value():
+    dates = pd.to_datetime(["2020-01-01", "2021-01-01"])
+    results = pd.DataFrame(
+        {
+            "strategy_return": [0.0, 0.10],
+            "portfolio_value": [1000.0, 1600.0],
+            "total_contributions": [1000.0, 1500.0],
+            "performance_index": [1.0, 1.1],
+        },
+        index=dates,
+    )
+
+    stats = calculate_stats(results)
+    years = (dates[-1] - dates[0]).days / 365.25
+
+    assert stats["total_return"] == pytest.approx(0.10)
+    assert stats["annualized_return"] == pytest.approx(1.1 ** (1 / years) - 1)
+
+
+def test_sharpe_is_undefined_for_constant_returns_and_missing_values_are_ignored():
+    results = pd.DataFrame(
+        {
+            "strategy_return": [0.0, float("nan"), 0.0],
+            "portfolio_value": [100.0, 100.0, 100.0],
+            "performance_index": [1.0, 1.0, 1.0],
+        }
+    )
+
+    stats = calculate_stats(results)
+
+    assert stats["sharpe_ratio"] is None
+    assert stats["annualized_volatility"] == 0
+    assert stats["max_drawdown"] == 0
+
+
+@pytest.mark.parametrize("amount", [float("inf"), float("nan")])
+def test_simulation_rejects_non_finite_cash_inputs(amount):
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        run_simulation(pd.DataFrame(), pd.DataFrame(), starting_money=amount)
 
 
 def test_recovery_after_loss():

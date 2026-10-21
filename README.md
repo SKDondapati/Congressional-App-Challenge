@@ -1,6 +1,6 @@
 # QuantLit
 
-QuantLit is a student-built investing simulator for people who are new to investing. It lets users explore how simple strategies behaved in historical market data, see the effect of contributions, and compare return with risk without using real money. It is designed to support learning; its impact has not been measured in a user study.
+QuantLit is a student-built financial-literacy lab for people who are new to investing. Students make a prediction, run strategies on historical market data, compare the calculated results, and consider what the experiment can and cannot show. It is designed to support learning; its impact has not been measured in a user study.
 
 ## What You Can Explore
 
@@ -8,7 +8,8 @@ QuantLit is a student-built investing simulator for people who are new to invest
 - Change an initial balance, monthly deposits, strategy, and date range.
 - Review ending balance, total contributions, time-weighted return, drawdown, volatility, and Sharpe ratio.
 - Compare strategies on the same dates, including an out-of-sample ML period and a buy-and-hold baseline.
-- Make a risk prediction before comparing strategies, then inspect a real historical decline in the selected data.
+- Predict which strategy will have the largest drawdown, explain the reasoning, then reveal the result for the selected dates.
+- Investigate an actual historical market decline and calculate how much a loss needs to recover.
 - Read beginner explanations or view the methodology and assumptions.
 
 ## Install
@@ -30,7 +31,7 @@ python -m pytest -q
 
 ## Run
 
-Start the web app with:
+After activating the virtual environment, start the web app with:
 
 ```bash
 python -m streamlit run ui/app_interface.py
@@ -48,10 +49,26 @@ python main.py
 
 - A strategy signal from the previous trading day is applied to the next day's price return. Signals are not allowed to use that next day's closing price.
 - The initial balance is present on the first selected date. Monthly deposits are added before returns on the first trading day of each later month in the selected range.
-- Investment return compounds the strategy's daily returns, so deposits are not counted as investment gains. The app also reports the total initial balance and deposits.
-- Drawdown is calculated from a performance index without cash deposits. The account-value chart still includes deposits.
-- Sharpe and volatility use daily strategy returns and 252 trading days. Sharpe assumes a 0% annual risk-free rate unless a caller supplies another rate.
-- The ML strategy trains chronologically on the earlier data and reports predictions only for its later holdout period. Its comparison uses the same dates as the buy-and-hold baseline.
+- Final account value includes deposits; investment gain/loss does not. Time-weighted investment return compounds daily strategy returns without treating deposits as gains.
+- Annualized return is calculated from time-weighted return and elapsed calendar time, not from the ending account balance. It is undefined if the period is zero or the cumulative return is -100% or less.
+- Drawdown is the largest decline from a previous high in the cumulative performance index, which excludes deposits. The account-value chart includes deposits.
+- Annualized volatility and Sharpe use daily strategy returns and 252 trading days. Sharpe assumes a 0% annual risk-free rate. Sharpe is `N/A` with fewer than two valid observations or zero return variability.
+- The ML model predicts the next day's direction from information available through the current close. Its chronological holdout signals are applied to the following day's return. Model comparisons use the same holdout dates as buy-and-hold; the model is an experiment, not a forecast.
+- The selected end date is inclusive in the interface. The data request advances the provider's exclusive end boundary by one day.
+- Multi-ticker portfolios are equal-weighted from daily returns on dates shared by all selected tickers. OHLC and volume are not invented when the source omits them.
+
+## Educational Experiment Workflow
+
+In Beginner Mode, choose **Compare All**, make a drawdown hypothesis, and optionally record why. Run the backtest to reveal the strategies' measured drawdowns and whether the prediction matched. Ties are shown together; if no strategy declined, the app says there is no largest decline. Try a different date range to investigate how the observation changes. This is a comparison of historical results, not evidence that one strategy will behave the same way in the future.
+
+## Architecture
+
+- `data/` validates and cleans downloaded market prices and aligns multi-ticker price histories.
+- `strategies/` creates buy-and-hold, moving-average, and chronological Random Forest signals.
+- `backtest/` applies prior-day signals to next-day returns and tracks both account value and a deposit-free performance index.
+- `analysis/` summarizes consistent strategy comparisons and identifies tied largest drawdowns.
+- `ui/` provides the Streamlit experiment controls, charts, history, explanations, and learning resources.
+- `tests/` uses synthetic data and mocked downloads for reproducible checks without relying on live prices.
 
 ## Strategy Notes
 
@@ -61,7 +78,9 @@ python main.py
 
 ## Data and Limitations
 
-Historical prices are downloaded from Yahoo Finance with `yfinance`; downloads need an internet connection and can fail or change. Individual-stock prices may not include dividends. Results are historical simulations, not predictions or investment advice. The simulator does not model fees, taxes, slippage, or trading constraints. The inflation chart uses an illustrative 2% assumption, not measured inflation for the selected dates. Cash-savings and real-estate comparisons are not implemented.
+Historical prices are downloaded from Yahoo Finance with `yfinance`; downloads need an internet connection and can fail or change. Individual-stock prices may not include dividends. Missing price dates are not fabricated. A multi-ticker portfolio uses dates shared by all tickers, which can shorten its usable history.
+
+Results are historical simulations, not predictions or investment advice. The simulator currently models long-or-flat exposure and does not model transaction costs, fees, taxes, slippage, withdrawals, or trading constraints. It does not calculate money-weighted return. The inflation chart uses an illustrative 2% assumption, not measured inflation for the selected dates. Cash-savings and real-estate comparisons are not implemented.
 
 The Hindi and Spanish interface translations cover only some strings and have not been reviewed by fluent financial translators. They should not be treated as complete translations.
 
@@ -75,3 +94,12 @@ The Hindi and Spanish interface translations cover only some strings and have no
 - `tests/`: offline tests using synthetic price data.
 
 GitHub Actions runs the test suite on pushes and pull requests. Deployment and volunteer learning-impact testing still need to be completed before making claims about real-world educational outcomes.
+
+## Competition Demo Outline
+
+1. Introduce the question: why can an investment with a positive return still have a difficult loss along the way?
+2. In Beginner Mode, choose **Compare All** and state a drawdown hypothesis with a short reason.
+3. Run one historical experiment and compare ending value, contributions, investment return, and drawdown.
+4. Reveal which strategy had the largest drawdown, explain the result using the selected dates, then change one date or assumption and rerun.
+5. Briefly explain that the backtest uses prior-day signals and that the Random Forest is evaluated on a later holdout period.
+6. Close by noting that historical simulations are educational comparisons, not predictions or financial advice.

@@ -26,25 +26,26 @@ def ml_predictor_strategy(data, lookback=5, test_size=0.2):
         raise ValueError("Price data must include a 'close' column.")
 
     close = pd.to_numeric(signals["close"], errors="coerce")
-    volume = signals.get("volume", pd.Series(1.0, index=signals.index))
-    high = signals.get("high", close)
-    low = signals.get("low", close)
     features = pd.DataFrame(index=signals.index)
     features["returns_1d"] = close.pct_change(fill_method=None)
     features["returns_lookback"] = close.pct_change(
         periods=max(lookback, 5), fill_method=None
     )
-    features["volume_change"] = pd.to_numeric(
-        volume, errors="coerce"
-    ).pct_change(fill_method=None)
     features["momentum"] = close - close.shift(lookback)
     volatility_window = max(10, lookback)
     features["volatility"] = features["returns_1d"].rolling(
         volatility_window, min_periods=volatility_window
     ).std()
-    features["high_low_ratio"] = pd.to_numeric(
-        high, errors="coerce"
-    ) / pd.to_numeric(low, errors="coerce")
+    if "volume" in signals.columns:
+        volume = pd.to_numeric(signals["volume"], errors="coerce")
+        if volume.notna().all() and volume.gt(0).all():
+            features["volume_change"] = volume.pct_change(fill_method=None)
+
+    if "high" in signals.columns and "low" in signals.columns:
+        high = pd.to_numeric(signals["high"], errors="coerce")
+        low = pd.to_numeric(signals["low"], errors="coerce")
+        if high.notna().all() and low.notna().all() and high.gt(0).all() and low.gt(0).all():
+            features["high_low_ratio"] = high / low
     features = features.replace([np.inf, -np.inf], np.nan).dropna()
 
     next_close = close.shift(-1)

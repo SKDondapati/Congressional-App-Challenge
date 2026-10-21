@@ -15,8 +15,13 @@ def run_simulation(
     month after the simulation starts. ``start_date`` lets strategies share an
     evaluation window while still using the prior close to calculate returns.
     """
-    if starting_money < 0 or monthly_contribution < 0:
-        raise ValueError("Starting money and monthly contributions cannot be negative.")
+    if (
+        not np.isfinite(starting_money)
+        or not np.isfinite(monthly_contribution)
+        or starting_money < 0
+        or monthly_contribution < 0
+    ):
+        raise ValueError("Starting money and monthly contributions must be finite and non-negative.")
 
     if data is None or data.empty:
         return pd.DataFrame(
@@ -104,41 +109,80 @@ def calculate_stats(results, risk_free_rate=0.0):
     if results is None or results.empty:
         return {
             "final_value": 0.0,
-            "total_return": 0.0,
+            "total_return": None,
             "total_contributions": 0.0,
-            "sharpe_ratio": 0.0,
-            "max_drawdown": 0.0,
-            "annualized_volatility": 0.0,
+            "annualized_return": None,
+            "sharpe_ratio": None,
+            "max_drawdown": None,
+            "annualized_volatility": None,
         }
 
-    fv = float(results["portfolio_value"].iloc[-1])
+    if not np.isfinite(risk_free_rate):
+        raise ValueError("Risk-free rate must be finite.")
+
+    portfolio_values = pd.to_numeric(
+        results.get("portfolio_value", pd.Series(dtype=float)), errors="coerce"
+    )
+    portfolio_values = portfolio_values[np.isfinite(portfolio_values)]
+    fv = float(portfolio_values.iloc[-1]) if not portfolio_values.empty else 0.0
     if "total_contributions" in results:
-        total_contributions = float(results["total_contributions"].iloc[-1])
+        contributions = pd.to_numeric(results["total_contributions"], errors="coerce")
+        contributions = contributions[np.isfinite(contributions)]
+        total_contributions = float(contributions.iloc[-1]) if not contributions.empty else 0.0
     else:
         total_contributions = 0.0
 
-    rets = results["strategy_return"].fillna(0.0)
-    tr = float((1 + rets).prod() - 1)
-    if len(rets) < 2 or rets.std(ddof=1) == 0:
-        sr = 0.0
+    rets = pd.to_numeric(
+        results.get("strategy_return", pd.Series(dtype=float)), errors="coerce"
+    )
+    rets = rets[np.isfinite(rets)]
+    tr = float((1 + rets).prod() - 1) if not rets.empty else 0.0
+
+    annualized_return = None
+    if not rets.empty and tr > -1 and len(results.index) > 1:
+        try:
+            first_date = pd.Timestamp(results.index[0])
+            last_date = pd.Timestamp(results.index[-1])
+            years = (last_date - first_date).total_seconds() / (365.25 * 86400)
+            if np.isfinite(years) and years > 0:
+                annualized_return = float((1 + tr) ** (1 / years) - 1)
+        except (TypeError, ValueError):
+            pass
+
+    if len(rets) < 2:
+        sr = None
+        volatility = None
     else:
-        excess = rets - risk_free_rate / 252
-        sr = np.sqrt(252) * excess.mean() / excess.std(ddof=1)
+        daily_std = rets.std(ddof=1)
+        volatility = float(daily_std * np.sqrt(252)) if np.isfinite(daily_std) else None
+        if not np.isfinite(daily_std) or daily_std == 0:
+            sr = None
+        else:
+            excess = rets - risk_free_rate / 252
+            sr = float(np.sqrt(252) * excess.mean() / daily_std)
 
     if "performance_index" in results:
-        performance = results["performance_index"]
+        performance = pd.to_numeric(results["performance_index"], errors="coerce")
     else:
-        performance = results["portfolio_value"]
-    cm = performance.cummax()
-    dd = performance.div(cm).sub(1)
-    md = dd.min() if not dd.empty else 0.0
-    volatility = float(rets.std(ddof=1) * np.sqrt(252)) if len(rets) > 1 else 0.0
+        # This fallback supports older result tables; simulations use performance_index.
+        performance = pd.to_numeric(
+            results.get("portfolio_value", pd.Series(dtype=float)), errors="coerce"
+        )
+    performance = performance[np.isfinite(performance) & (performance >= 0)]
+    if not performance.empty:
+        running_peak = performance.cummax().replace(0, np.nan)
+        drawdown = performance.div(running_peak).sub(1)
+        drawdown = drawdown[np.isfinite(drawdown)]
+        max_drawdown = float(drawdown.min()) if not drawdown.empty else None
+    else:
+        max_drawdown = None
 
     return {
-        "final_value": float(fv),
-        "total_return": float(tr),
+        "final_value": fv,
+        "total_return": tr,
         "total_contributions": total_contributions,
-        "sharpe_ratio": float(sr),
-        "max_drawdown": float(md),
+        "annualized_return": annualized_return,
+        "sharpe_ratio": sr,
+        "max_drawdown": max_drawdown,
         "annualized_volatility": volatility,
     }

@@ -42,10 +42,8 @@ def render_explain_mode_for_metric(title, value, stats=None, results=None, start
 			example = f"In this experiment the Sharpe ratio was {sr:.2f}. It summarizes return relative to daily variability."
 			so_what = "A higher value is not automatically a better investment. It depends on the period, assumptions, and whether the risk fits your needs."
 		else:
-			example = t(
-				"Imagine two funds that both earned 8% per year. If one had small swings and the other jumped all over the place, the calmer one has a higher Sharpe."
-			)
-			so_what = None
+			example = "The ratio is undefined for this experiment because it has too few return observations or no return variability."
+			so_what = "N/A is more honest than showing a number when the calculation is undefined."
 
 		quant = t("Annualized Sharpe uses daily strategy returns, a 0% annual risk-free rate by default, and 252 trading days.")
 		calculation = "sqrt(252) * mean(daily_return - risk_free_rate / 252) / std(daily_return)"
@@ -92,14 +90,7 @@ def render_explain_mode_for_metric(title, value, stats=None, results=None, start
 	# CAGR (compound annual growth rate)
 	elif title.lower().startswith("cagr"):
 		simple = t("Average annual growth rate if returns compounded each year.")
-		cagr = None
-		try:
-			if results is not None and stats.get("total_return") is not None:
-				days = (results.index[-1] - results.index[0]).days
-				years = days / 365.25 if days > 0 else 1
-				cagr = (1 + stats["total_return"]) ** (1 / years) - 1
-		except Exception:
-			cagr = None
+		cagr = stats.get("annualized_return")
 		if cagr is not None:
 			example = f"CAGR for this experiment was about {cagr:.2%} per year over the period."
 			so_what = (
@@ -117,14 +108,7 @@ def render_explain_mode_for_metric(title, value, stats=None, results=None, start
 		# assume default inflation if we can't compute it here
 		inflation_rate = 0.02
 		tr = stats.get("total_return") if stats else None
-		cagr_val = None
-		try:
-			if results is not None and stats.get("total_return") is not None:
-				days = (results.index[-1] - results.index[0]).days
-				years = days / 365.25 if days > 0 else 1
-				cagr_val = (1 + stats["total_return"]) ** (1 / years) - 1
-		except Exception:
-			pass
+		cagr_val = stats.get("annualized_return")
 		if cagr_val is not None:
 			real = (1 + cagr_val) / (1 + inflation_rate) - 1
 			example = f"Using {inflation_rate:.0%} as an example inflation assumption, estimated real CAGR would be about {real:.2%}. This is not the actual inflation rate for the selected dates."
@@ -165,7 +149,7 @@ def show_metric_explainers(stats, results=None, starting_amount=None, start_date
 	"""
 	render_explain_mode_for_metric(
 		"Total Return",
-		f"{stats.get('total_return', 0):.2%}",
+		f"{stats['total_return']:.2%}" if stats.get("total_return") is not None else "N/A",
 		stats=stats,
 		results=results,
 		starting_amount=starting_amount,
@@ -173,7 +157,7 @@ def show_metric_explainers(stats, results=None, starting_amount=None, start_date
 	)
 	render_explain_mode_for_metric(
 		"Sharpe Ratio",
-		f"{stats.get('sharpe_ratio', 0):.2f}",
+		f"{stats['sharpe_ratio']:.2f}" if stats.get("sharpe_ratio") is not None else "N/A",
 		stats=stats,
 		results=results,
 		starting_amount=starting_amount,
@@ -181,7 +165,7 @@ def show_metric_explainers(stats, results=None, starting_amount=None, start_date
 	)
 	render_explain_mode_for_metric(
 		"Max Drawdown",
-		f"{stats.get('max_drawdown', 0):.2%}",
+		f"{stats['max_drawdown']:.2%}" if stats.get("max_drawdown") is not None else "N/A",
 		stats=stats,
 		results=results,
 		starting_amount=starting_amount,
@@ -189,7 +173,11 @@ def show_metric_explainers(stats, results=None, starting_amount=None, start_date
 	)
 	render_explain_mode_for_metric(
 		"Volatility",
-		f"{stats.get('annualized_volatility', 0):.2%}",
+		(
+			f"{stats['annualized_volatility']:.2%}"
+			if stats.get("annualized_volatility") is not None
+			else "N/A"
+		),
 		stats=stats,
 		results=results,
 		starting_amount=starting_amount,

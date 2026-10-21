@@ -26,20 +26,35 @@ def display_metrics(stats, show_tooltips=False):
 
     columns = st.columns(6)
     values = [
-        ("Total Return", f"{stats.get('total_return', 0):.2%}"),
+        ("Total Return", _format_percent(stats.get("total_return"))),
         ("Total Contributed", f"${stats.get('total_contributions', 0):,.2f}"),
-        ("Max Drawdown", f"{stats.get('max_drawdown', 0):.2%}"),
+        ("Max Drawdown", _format_percent(stats.get("max_drawdown"))),
         ("Final Value", f"${stats.get('final_value', 0):,.2f}"),
-        ("Annualized Volatility", f"{stats.get('annualized_volatility', 0):.2%}"),
-        ("Sharpe Ratio", f"{stats.get('sharpe_ratio', 0):.2f}"),
+        (
+            "Annualized Volatility",
+            _format_percent(stats.get("annualized_volatility")),
+        ),
+        ("Sharpe Ratio", _format_number(stats.get("sharpe_ratio"))),
     ]
     for column, (label, value) in zip(columns, values):
         column.markdown(label_text(label), unsafe_allow_html=show_tooltips)
         column.write(value)
 
 
+def _format_percent(value):
+    return f"{value:.2%}" if value is not None else "N/A"
+
+
+def _format_number(value):
+    return f"{value:.2f}" if value is not None else "N/A"
+
+
 def render_shock_card(stats, strategy_name):
-    drawdown = float(stats.get("max_drawdown", 0.0))
+    drawdown_value = stats.get("max_drawdown")
+    if drawdown_value is None:
+        st.info(f"{strategy_name} has no valid drawdown result for this period.")
+        return
+    drawdown = float(drawdown_value)
     if drawdown < -0.20:
         recovery = -drawdown / (1 + drawdown)
         st.error(f"{strategy_name} had a historical drawdown of {drawdown:.2%}.")
@@ -109,15 +124,20 @@ def render_beginner_explanation(results_dict, ticker, show_tooltips=True):
         st.markdown(f"**{name}**")
         st.write(f"Final value: ${stats.get('final_value', 0):,.2f}")
         st.write(f"Total contributed: ${stats.get('total_contributions', 0):,.2f}")
-        st.write(f"Investment return, excluding deposits: {stats.get('total_return', 0):.2%}")
-        st.write(f"Maximum drawdown: {stats.get('max_drawdown', 0):.2%}")
+        st.write(
+            "Investment return, excluding deposits: "
+            + _format_percent(stats.get("total_return"))
+        )
+        st.write(
+            "Maximum drawdown: " + _format_percent(stats.get("max_drawdown"))
+        )
 
 
 def render_quant_metrics(stats):
     st.markdown("### Quant Metrics")
     display_metrics(stats)
     st.write(
-        "Sharpe and volatility use daily investment returns. Drawdown excludes deposits."
+        "Sharpe and volatility use daily investment returns. Drawdown excludes deposits. Undefined metrics are shown as N/A."
     )
 
 

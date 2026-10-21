@@ -117,14 +117,10 @@ def plot_inflation_vs_sp500(
     start_date, end_date, inflation_rate=0.02, index_ticker="SPY"
 ):
     """Compare an ETF with cash purchasing power under an example inflation rate."""
-    import yfinance as yf
-
-    from data.data_manager import MarketDataError, clean_price_data
+    from data.data_manager import MarketDataError, clean_price_data, download_market_data
 
     try:
-        raw = yf.download(
-            index_ticker, start=start_date, end=end_date, progress=False
-        )
+        raw = download_market_data(index_ticker, start_date, end_date)
         prices = clean_price_data(raw)["close"]
     except MarketDataError as error:
         st.error(str(error))

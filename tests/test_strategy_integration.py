@@ -3,9 +3,11 @@ import pytest
 
 from backtest.engine import calculate_stats, run_simulation
 from analysis.comparison import compare_results
+from analysis.comparison import largest_drawdown_strategies
 from strategies.benchmark import buy_hold_strategy
 from strategies.ml_predictor import ml_predictor_strategy
 from strategies.moving_average import moving_average_strategy
+import main
 
 
 def test_strategy_signals_and_stats_are_compatible():
@@ -104,3 +106,45 @@ def test_strategy_parameters_are_valid():
         moving_average_strategy(pd.DataFrame({"close": [1, 2]}), 5, 5)
     with pytest.raises(ValueError):
         ml_predictor_strategy(pd.DataFrame({"close": [1, 2]}), test_size=1)
+
+
+def test_ml_strategy_runs_without_volume_or_intraday_fields(sample_prices):
+    signals = ml_predictor_strategy(sample_prices[["close"]])
+
+    assert signals["signal"].isin([0, 1]).all()
+    assert signals["evaluation_prediction"].any()
+
+
+def test_largest_drawdown_prediction_handles_ties_and_no_declines():
+    declined = pd.DataFrame(
+        {
+            "strategy_return": [0.0, -0.2, 0.25],
+            "performance_index": [1.0, 0.8, 1.0],
+            "portfolio_value": [100.0, 80.0, 100.0],
+        }
+    )
+    flat = pd.DataFrame(
+        {
+            "strategy_return": [0.0, 0.0],
+            "performance_index": [1.0, 1.0],
+            "portfolio_value": [100.0, 100.0],
+        }
+    )
+
+    assert largest_drawdown_strategies(
+        {"Moving Average": declined, "Buy & Hold": declined}
+    ) == ["Moving Average", "Buy & Hold"]
+    assert largest_drawdown_strategies({"Flat": flat}) == []
+
+
+def test_cli_reports_undefined_sharpe_for_flat_prices(monkeypatch, capsys):
+    dates = pd.date_range("2024-01-01", periods=3, freq="D")
+    raw_data = pd.DataFrame({"Close": [100.0, 100.0, 100.0]}, index=dates)
+    monkeypatch.setattr(main, "download_market_data", lambda *args: raw_data)
+
+    result = main.run_strategy_test(
+        "FLAT", "2024-01-01", "2024-01-03", "Buy & Hold", buy_hold_strategy
+    )
+
+    assert result["sharpe_ratio"] is None
+    assert "Sharpe ratio: N/A" in capsys.readouterr().out

@@ -10,7 +10,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from backtest.engine import calculate_stats, run_simulation
-from analysis.comparison import compare_results
+from analysis.comparison import compare_results, largest_drawdown_strategies
 from data.data_manager import (
     MarketDataError,
     clean_price_data,
@@ -72,6 +72,8 @@ def generate_insights(stats, results=None, starting_amount=None):
         insights.append(
             f"Sharpe ratio was {sr:.2f}; it summarizes return relative to daily variability, but does not decide which investment is right for you."
         )
+    else:
+        insights.append("Sharpe ratio was not defined for this return series.")
 
     # limit to 3 insights
     return insights[:3]
@@ -172,11 +174,18 @@ if page == "Backtest Simulator":
         ["Moving Average (20/50)", "ML Predictor", "Buy & Hold", "Compare All"],
     )
     if mode == "Beginner Mode" and strategy_choice == "Compare All":
+        st.sidebar.markdown("### Prediction vs. Reality Lab")
+        st.sidebar.caption(
+            "Make a prediction before comparing the strategies on the selected dates."
+        )
         st.sidebar.selectbox(
-            "Before the results: which strategy will have the largest drawdown?",
+            "Which strategy will have the largest drawdown?",
             ["Moving Average", "ML Predictor", "Buy & Hold"],
+            index=None,
+            placeholder="Choose your hypothesis",
             key="risk_prediction",
         )
+        st.sidebar.text_input("Why do you think so?", key="risk_reason")
 
     if mode == "Quant Mode":
         short_window = (
@@ -206,6 +215,13 @@ if page == "Backtest Simulator":
         st.caption("Test trading strategies on real historical data.")
 
     if run_btn:
+        if (
+            mode == "Beginner Mode"
+            and strategy_choice == "Compare All"
+            and not st.session_state.get("risk_prediction")
+        ):
+            st.warning("Choose a drawdown hypothesis before running the lab.")
+            st.stop()
         # If a quick-run was triggered by the experiment builder, consume its params
         run_params = st.session_state.pop("run_params", None)
         if run_params:
@@ -296,20 +312,40 @@ if page == "Backtest Simulator":
             st.dataframe(compare_results(results_dict), hide_index=True)
 
             if mode == "Beginner Mode" and len(results_dict) > 1:
-                actual_riskiest = max(
-                    results_dict,
-                    key=lambda name: abs(results_dict[name][1]["max_drawdown"]),
-                )
+                actual_riskiest = largest_drawdown_strategies(results_dict)
                 prediction = st.session_state.get("risk_prediction")
-                if prediction == actual_riskiest:
+                st.subheader("Prediction vs. Reality")
+                st.write(f"Your prediction: **{prediction}**")
+                reason = st.session_state.get("risk_reason", "").strip()
+                if reason:
+                    st.write(f"Your reasoning: {reason}")
+                if not actual_riskiest:
+                    st.info(
+                        "No strategy had a measurable decline in this test period, "
+                        "so there is no largest drawdown to identify."
+                    )
+                elif prediction not in results_dict:
+                    st.warning(
+                        f"{prediction} could not be evaluated because this date range "
+                        "did not provide enough out-of-sample predictions."
+                    )
+                elif prediction in actual_riskiest:
+                    actual_label = " and ".join(actual_riskiest)
                     st.success(
-                        f"Your prediction was right: {actual_riskiest} had the largest "
-                        "historical drawdown in this test period."
+                        f"Your prediction matched the result: {actual_label} "
+                        "had the largest historical drawdown."
                     )
                 else:
+                    actual_label = " and ".join(actual_riskiest)
                     st.info(
-                        f"In this test period, {actual_riskiest} had the largest "
+                        f"In this test period, {actual_label} had the largest "
                         "historical drawdown. A different date range can change the result."
+                    )
+                if actual_riskiest:
+                    st.caption(
+                        "Drawdown measures the largest fall from a previous "
+                        "investment-performance high; deposits are excluded. "
+                        "This historical result does not predict future losses."
                     )
 
             if mode == "Beginner Mode":
@@ -557,12 +593,15 @@ if page == "Backtest Simulator":
                 with st.expander("Show the math"):
                     try:
                         days = (results.index[-1] - results.index[0]).days
-                        years = days / 365.25 if days > 0 else 1
-                        cagr = (fv / sv) ** (1 / years) - 1 if sv > 0 else 0.0
+                        years = days / 365.25 if days > 0 else None
+                        cagr = stats.get("annualized_return")
                         st.markdown("**Investment return** = product(1 + daily strategy return) - 1")
                         st.markdown("**CAGR** = (1 + investment return)^(1 / years) - 1")
-                        st.write(f"Years: {years:.1f}")
-                        st.write(f"CAGR: {cagr:.2%}")
+                        st.write(f"Years: {years:.1f}" if years is not None else "Years: N/A")
+                        if cagr is not None:
+                            st.write(f"Annualized investment return (CAGR): {cagr:.2%}")
+                        else:
+                            st.info("CAGR is undefined for this return series or period.")
                     except Exception:
                         st.info("Could not compute math for this experiment.")
 
@@ -617,14 +656,26 @@ if page == "Backtest Simulator":
                         st.markdown("**Original**")
                         st.write(f"Final value: ${fv:,.2f}")
                         st.write(f"Total return: {tr:.2%}")
-                        st.write(f"Max drawdown: {stats.get('max_drawdown',0):.2%}")
+                        drawdown = stats.get("max_drawdown")
+                        st.write(
+                            "Max drawdown: "
+                            + (f"{drawdown:.2%}" if drawdown is not None else "N/A")
+                        )
                     with col2:
                         st.markdown("**Variant**")
                         nf = new_stats.get("final_value", 0.0)
                         nt = new_stats.get("total_return", 0.0)
                         st.write(f"Final value: ${nf:,.2f}")
                         st.write(f"Total return: {nt:.2%}")
-                        st.write(f"Max drawdown: {new_stats.get('max_drawdown',0):.2%}")
+                        new_drawdown = new_stats.get("max_drawdown")
+                        st.write(
+                            "Max drawdown: "
+                            + (
+                                f"{new_drawdown:.2%}"
+                                if new_drawdown is not None
+                                else "N/A"
+                            )
+                        )
                     st.markdown("---")
                     diff = nf - fv
                     st.write(f"Difference: ${diff:,.2f}")
@@ -730,12 +781,7 @@ if page == "Backtest Simulator":
                             if res is None:
                                 return None
                             try:
-                                total_return = entry.get("stats", {}).get("total_return")
-                                days = (res.index[-1] - res.index[0]).days
-                                years = days / 365.25 if days > 0 else 1
-                                if total_return is None or total_return <= -1:
-                                    return None
-                                return (1 + total_return) ** (1 / years) - 1
+                                return entry.get("stats", {}).get("annualized_return")
                             except Exception:
                                 return None
 
@@ -749,10 +795,22 @@ if page == "Backtest Simulator":
                             st.write(f"Start: {money(e1.get('starting_amount'))}")
                             st.write(f"Monthly: ${int(e1.get('monthly_contribution',0))}")
                             st.write(f"Final value: ${e1.get('final_value'):,}")
-                            st.write(f"Total return: {e1.get('total_return'):.2%}")
+                            return_value = e1.get("total_return")
+                            st.write(
+                                "Investment return: "
+                                + (f"{return_value:.2%}" if return_value is not None else "N/A")
+                            )
                             if c1 is not None:
                                 st.write(f"CAGR: {c1:.2%}")
-                            st.write(f"Max drawdown: {e1.get('stats',{}).get('max_drawdown',0):.2%}")
+                            drawdown_value = e1.get("stats", {}).get("max_drawdown")
+                            st.write(
+                                "Max drawdown: "
+                                + (
+                                    f"{drawdown_value:.2%}"
+                                    if drawdown_value is not None
+                                    else "N/A"
+                                )
+                            )
                             # insights
                             ins1 = generate_insights(e1.get('stats', {}), results=e1.get('results'), starting_amount=e1.get('starting_amount'))
                             if ins1:
@@ -765,10 +823,22 @@ if page == "Backtest Simulator":
                             st.write(f"Start: {money(e2.get('starting_amount'))}")
                             st.write(f"Monthly: ${int(e2.get('monthly_contribution',0))}")
                             st.write(f"Final value: ${e2.get('final_value'):,}")
-                            st.write(f"Total return: {e2.get('total_return'):.2%}")
+                            return_value = e2.get("total_return")
+                            st.write(
+                                "Investment return: "
+                                + (f"{return_value:.2%}" if return_value is not None else "N/A")
+                            )
                             if c2 is not None:
                                 st.write(f"CAGR: {c2:.2%}")
-                            st.write(f"Max drawdown: {e2.get('stats',{}).get('max_drawdown',0):.2%}")
+                            drawdown_value = e2.get("stats", {}).get("max_drawdown")
+                            st.write(
+                                "Max drawdown: "
+                                + (
+                                    f"{drawdown_value:.2%}"
+                                    if drawdown_value is not None
+                                    else "N/A"
+                                )
+                            )
                             ins2 = generate_insights(e2.get('stats', {}), results=e2.get('results'), starting_amount=e2.get('starting_amount'))
                             if ins2:
                                 st.markdown("**What did I learn:**")
@@ -890,7 +960,7 @@ elif page == "Methodology":
         )
     with st.expander("Fees & taxes"):
         st.markdown(
-            "We do not model transaction costs, management fees, or taxes. Results are gross nominal returns. To approximate fees, reduce returns or add a monthly cost to contributions."
+            "We do not model transaction costs, management fees, or taxes. Results are gross nominal returns; this app does not estimate net returns after costs."
         )
     with st.expander("Nominal vs Real returns"):
         st.markdown(

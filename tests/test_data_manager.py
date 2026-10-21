@@ -55,6 +55,21 @@ def test_download_market_data_reports_an_empty_response():
             download_market_data("AAPL", "2024-01-01", "2024-02-01")
 
 
+def test_download_includes_the_selected_end_date():
+    raw = pd.DataFrame({"Close": [10]}, index=pd.to_datetime(["2024-01-31"]))
+    with patch("data.data_manager.yf.download", return_value=raw) as download:
+        download_market_data("AAPL", "2024-01-01", "2024-01-31")
+
+    assert pd.Timestamp(download.call_args.kwargs["end"]) == pd.Timestamp("2024-02-01")
+
+
+def test_clean_price_data_keeps_missing_volume_explicit():
+    cleaned = clean_price_data(pd.DataFrame({"Close": [10, 11]}))
+
+    assert cleaned["close"].tolist() == [10, 11]
+    assert cleaned["volume"].isna().all()
+
+
 @pytest.mark.parametrize(
     "ticker,start,end",
     [("", "2024-01-01", "2024-02-01"), ("AAPL", "2024-02-01", "2024-01-01")],
@@ -76,3 +91,18 @@ def test_multi_ticker_download_uses_concat_and_unique_dates():
 
     assert result.index.is_unique
     assert result["close"].tolist() == pytest.approx([75, 78.75, 82.6875])
+
+
+def test_multi_ticker_download_uses_shared_dates_only():
+    first_dates = pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03"])
+    second_dates = pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"])
+    first = pd.DataFrame({"Close": [100, 110, 121]}, index=first_dates)
+    second = pd.DataFrame({"Close": [50, 55, 60.5]}, index=second_dates)
+
+    with patch(
+        "data.data_manager.download_market_data", side_effect=[first, second]
+    ):
+        result = download_market_data_multi("AAA,BBB", "2024-01-01", "2024-01-04")
+
+    assert result.index.tolist() == first_dates[1:].tolist()
+    assert result["close"].tolist() == pytest.approx([80.0, 88.0])

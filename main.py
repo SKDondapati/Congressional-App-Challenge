@@ -8,6 +8,10 @@ from strategies.ml_predictor import ml_predictor_strategy
 from strategies.moving_average import moving_average_strategy
 
 
+def _format_metric(value, format_spec):
+    return format(value, format_spec) if value is not None else "N/A"
+
+
 def run_strategy_test(
     ticker, start_date, end_date, strategy_name, strategy_func, **kwargs
 ):
@@ -26,9 +30,9 @@ def run_strategy_test(
     stats = calculate_stats(results)
 
     print(f"Final value: ${stats['final_value']:.2f}")
-    print(f"Total return: {stats['total_return']:.2%}")
-    print(f"Sharpe ratio: {stats['sharpe_ratio']:.2f}")
-    print(f"Max drawdown: {stats['max_drawdown']:.2%}")
+    print(f"Total return: {_format_metric(stats['total_return'], '.2%')}")
+    print(f"Sharpe ratio: {_format_metric(stats['sharpe_ratio'], '.2f')}")
+    print(f"Max drawdown: {_format_metric(stats['max_drawdown'], '.2%')}")
 
     return stats
 
