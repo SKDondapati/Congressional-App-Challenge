@@ -62,6 +62,9 @@ def run_lab_experiment(data, strategy, short_window=20, long_window=50, cost_per
     s, b = calculate_stats(strat_res), calculate_stats(bench_res)
     s["num_trades"], s["time_in_market"] = _trade_stats(strat_res)
     b["num_trades"], b["time_in_market"] = _trade_stats(bench_res)
+    # Stretching a few months of results into a yearly rate is misleading, so skip it.
+    if (strat_res.index[-1] - strat_res.index[0]).days < 365:
+        s["annualized_return"] = b["annualized_return"] = None
     return {
         "signals": signals,
         "strat_res": strat_res,

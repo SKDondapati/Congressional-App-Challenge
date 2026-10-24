@@ -39,3 +39,8 @@ def test_removed_weights_are_ignored_when_importing_old_config():
     )
 
     assert not hasattr(experiment, "weights")
+
+def test_goal_presets_choose_the_strategy_that_matches_the_lesson():
+    assert ExperimentConfig.preset_for_goal("Grow money over time").strategy == "Buy & Hold"
+    assert ExperimentConfig.preset_for_goal("Understand risk").strategy == "Buy & Hold"
+    assert ExperimentConfig.preset_for_goal("Compare investments").strategy == "Compare All"
