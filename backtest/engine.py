@@ -8,12 +8,16 @@ def run_simulation(
     starting_money=10000,
     monthly_contribution=0,
     start_date=None,
+    cost_per_trade=0.0,
 ):
     """Simulate long-only signals; a signal is applied to the next day's return.
 
     Contributions are added before returns on the first trading day of each
     month after the simulation starts. ``start_date`` lets strategies share an
     evaluation window while still using the prior close to calculate returns.
+
+    ``cost_per_trade`` is a fraction (0.001 = 0.1%) charged whenever the held
+    position changes, including the first buy at the start of the window.
     """
     if (
         not np.isfinite(starting_money)
@@ -22,6 +26,8 @@ def run_simulation(
         or monthly_contribution < 0
     ):
         raise ValueError("Starting money and monthly contributions must be finite and non-negative.")
+    if not np.isfinite(cost_per_trade) or not 0 <= cost_per_trade < 1:
+        raise ValueError("Cost per trade must be between 0 and 1 (for example, 0.001 for 0.1%).")
 
     if data is None or data.empty:
         return pd.DataFrame(
@@ -62,10 +68,14 @@ def run_simulation(
 
     results = pd.DataFrame(index=selected_dates)
     results["daily_return"] = all_returns.reindex(selected_dates).fillna(0.0)
-    results["strategy_return"] = (
-        positions.reindex(selected_dates).fillna(0.0)
-        * results["daily_return"]
-    )
+    held = positions.reindex(selected_dates).fillna(0.0)
+    # A trade shows up on the first day a new position is held. The window
+    # starts in cash, so an investment held on day one counts as a buy.
+    trades = held.diff().abs()
+    trades.iloc[0] = abs(held.iloc[0])
+    results["holding"] = held
+    results["trade"] = trades
+    results["strategy_return"] = held * results["daily_return"] - trades * cost_per_trade
 
     contributions = []
     previous_month = (selected_dates[0].year, selected_dates[0].month)
