@@ -156,3 +156,31 @@ def download_market_data_multi(tickers, start_date, end_date):
     )
 
     return out.dropna(subset=["close"])
+
+
+def make_practice_data(start_date, end_date, seed=8, annual_drift=0.08, annual_vol=0.18):
+    """Simulated prices so the app can be demoed without internet.
+
+    This is NOT real market data, and the app labels it clearly whenever it is used.
+    """
+    import numpy as np
+
+    days = pd.bdate_range(pd.to_datetime(start_date), pd.to_datetime(end_date))
+    if len(days) < 2:
+        raise MarketDataError("Choose a longer date range.")
+    rng = np.random.default_rng(seed)
+    daily_vol = annual_vol / np.sqrt(252)
+    # Switching between calm, flat and falling stretches makes the series look like a real market.
+    regime = np.repeat(rng.choice([1.6, 0.9, -1.4], size=len(days) // 60 + 1, p=[0.45, 0.4, 0.15]), 60)
+    rets = rng.normal(annual_drift / 252 * regime[: len(days)], daily_vol, len(days))
+    close = 100 * np.exp(np.cumsum(rets))
+    return pd.DataFrame(
+        {
+            "open": np.r_[100.0, close[:-1]],
+            "high": close * 1.005,
+            "low": close * 0.995,
+            "close": close,
+            "volume": rng.integers(1_000_000, 5_000_000, len(days)).astype(float),
+        },
+        index=days,
+    )

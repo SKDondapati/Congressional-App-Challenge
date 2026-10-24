@@ -93,6 +93,16 @@ class ExperimentConfig:
                 horizon_years=10,
                 lesson="What market crashes look like",
             )
+        if goal == "Compare investments":
+            return cls(
+                goal=goal,
+                ticker=suggestion,
+                starting_amount=10000,
+                monthly_contribution=100,
+                horizon_years=10,
+                strategy="Compare All",
+                lesson="How different strategies stack up over the same period",
+            )
         # default
         return cls(
             goal=goal,

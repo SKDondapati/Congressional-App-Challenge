@@ -8,7 +8,8 @@ QuantLit is a student-built financial-literacy lab for people who are new to inv
 - Change an initial balance, monthly deposits, strategy, and date range.
 - Review ending balance, total contributions, time-weighted return, drawdown, volatility, and Sharpe ratio.
 - Compare strategies on the same dates, including an out-of-sample ML period and a buy-and-hold baseline.
-- Predict which strategy will have the largest drawdown, explain the reasoning, then reveal the result for the selected dates.
+- **Prediction-versus-Reality Lab:** predict whether a moving-average rule or an AI predictor beats buy-and-hold (and guess the return and worst drop), lock it in, then see your score, the reasons behind the result, a year-by-year check, and the limits of the test.
+- Add a trading cost per trade to see how fees affect strategies that trade often.
 - Investigate an actual historical market decline and calculate how much a loss needs to recover.
 - Read beginner explanations or view the methodology and assumptions.
 
@@ -59,7 +60,13 @@ python main.py
 
 ## Educational Experiment Workflow
 
-In Beginner Mode, choose **Compare All**, make a drawdown hypothesis, and optionally record why. Run the backtest to reveal the strategies' measured drawdowns and whether the prediction matched. Ties are shown together; if no strategy declined, the app says there is no largest decline. Try a different date range to investigate how the observation changes. This is a comparison of historical results, not evidence that one strategy will behave the same way in the future.
+Open the **Prediction Lab** (the first page). Pick a stock, a period, and a strategy, then lock in a prediction: which approach ends with more money, buy-and-hold's total return, and its worst drop. QuantLit runs both approaches over the same dates and scores each guess. For the AI predictor, the model trains on the first 80% of the dates and both approaches are scored only on the final 20%, which the model never saw. **Practice data** (clearly labeled as simulated) keeps the Lab usable if Yahoo Finance is unavailable. Results describe history, not the future.
+
+## Deploy
+
+1. Push to GitHub (the `venv/` folder is ignored and should not be committed).
+2. At https://share.streamlit.io, create an app from this repo with main file `ui/app_interface.py`.
+3. Open the public link in a private window and on a phone to confirm it works.
 
 ## Architecture
 

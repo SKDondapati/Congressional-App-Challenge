@@ -38,6 +38,7 @@ from ui.components import (
 from ui.education import render_investing_guide, render_resource_library
 from ui.explain_mode import show_metric_explainers
 from ui.i18n import t
+from ui.lab_page import render_lab_page
 from ui.experiment import ExperimentConfig
 
 st.set_page_config(page_title="QuantLit - Algorithmic Literacy Lab", layout="wide")
@@ -104,7 +105,10 @@ st.sidebar.title("QuantLit")
 st.sidebar.markdown("### Navigation")
 
 # Main navigation
-page = st.sidebar.radio("Go to", ["Backtest Simulator", "Investing Guide", "Methodology", "Resources"])
+page = st.sidebar.radio(
+    "Go to",
+    ["Prediction Lab", "Backtest Simulator", "Investing Guide", "Methodology", "Resources"],
+)
 
 # Only show mode selection if on Backtest Simulator
 if page == "Backtest Simulator":
@@ -162,7 +166,7 @@ if page == "Backtest Simulator":
         st.markdown(
             """
         - Contributions are added before returns on the first trading day of each later month in the selected period.
-        - No transaction costs or fees are modeled.
+        - No transaction costs or fees are modeled here (the Prediction Lab lets you add them).
         - Dividends are included only if present in the price series used (Close prices may already reflect total return in ETF data).
         - Returns are nominal (not inflation-adjusted) unless you adjust inputs externally.
         - Missing trading days are handled by aligning to available trading dates.
@@ -173,20 +177,6 @@ if page == "Backtest Simulator":
         "Select Strategy",
         ["Moving Average (20/50)", "ML Predictor", "Buy & Hold", "Compare All"],
     )
-    if mode == "Beginner Mode" and strategy_choice == "Compare All":
-        st.sidebar.markdown("### Prediction vs. Reality Lab")
-        st.sidebar.caption(
-            "Make a prediction before comparing the strategies on the selected dates."
-        )
-        st.sidebar.selectbox(
-            "Which strategy will have the largest drawdown?",
-            ["Moving Average", "ML Predictor", "Buy & Hold"],
-            index=None,
-            placeholder="Choose your hypothesis",
-            key="risk_prediction",
-        )
-        st.sidebar.text_input("Why do you think so?", key="risk_reason")
-
     if mode == "Quant Mode":
         short_window = (
             st.sidebar.slider("Short MA Window", 5, 50, 20)
@@ -202,8 +192,13 @@ if page == "Backtest Simulator":
         short_window = 20
         long_window = 50
 
-    # Run button; also allow auto-run via session_state when a goal card triggers an experiment
-    run_btn = st.sidebar.button("Run Backtest", width="stretch") or st.session_state.get("auto_run", False)
+    # Run button; also allow auto-run via session_state when a goal card triggers an experiment.
+    # Results stay on screen after later clicks (e.g. "Run variant"), because Streamlit reruns the
+    # whole script on every click and a button is only True for one rerun.
+    fresh_run = bool(
+        st.sidebar.button("Run Backtest", width="stretch") or st.session_state.get("auto_run", False)
+    )
+    run_btn = fresh_run or st.session_state.get("active_run") is not None
 
 # --- Main Panel ---
 if page == "Backtest Simulator":
@@ -215,22 +210,46 @@ if page == "Backtest Simulator":
         st.caption("Test trading strategies on real historical data.")
 
     if run_btn:
-        if (
-            mode == "Beginner Mode"
-            and strategy_choice == "Compare All"
-            and not st.session_state.get("risk_prediction")
-        ):
-            st.warning("Choose a drawdown hypothesis before running the lab.")
-            st.stop()
-        # If a quick-run was triggered by the experiment builder, consume its params
-        run_params = st.session_state.pop("run_params", None)
-        if run_params:
-            starting_amount = run_params.get("starting_amount", starting_amount)
-            monthly_contribution = run_params.get("monthly_contribution", monthly_contribution)
-            if run_params.get("horizon_years") is not None:
-                use_horizon = True
-                horizon_years = run_params.get("horizon_years")
-            ticker = run_params.get("ticker", ticker)
+        if fresh_run:
+            # If a quick-run was triggered by the experiment builder, consume its params
+            run_params = st.session_state.pop("run_params", None)
+            if run_params:
+                starting_amount = run_params.get("starting_amount", starting_amount)
+                monthly_contribution = run_params.get("monthly_contribution", monthly_contribution)
+                if run_params.get("horizon_years") is not None:
+                    use_horizon = True
+                    horizon_years = run_params.get("horizon_years")
+                ticker = run_params.get("ticker", ticker)
+                strategy_choice = run_params.get("strategy", strategy_choice)
+            # Remember exactly what was run, so later clicks redraw the same experiment.
+            st.session_state["active_run"] = {
+                "ticker": ticker,
+                "start_date": start_date,
+                "end_date": end_date,
+                "starting_amount": starting_amount,
+                "monthly_contribution": monthly_contribution,
+                "use_horizon": use_horizon,
+                "horizon_years": horizon_years,
+                "strategy_choice": strategy_choice,
+                "short_window": short_window,
+                "long_window": long_window,
+            }
+        else:
+            saved = st.session_state["active_run"]
+            ticker = saved["ticker"]
+            start_date = saved["start_date"]
+            end_date = saved["end_date"]
+            starting_amount = saved["starting_amount"]
+            monthly_contribution = saved["monthly_contribution"]
+            use_horizon = saved["use_horizon"]
+            horizon_years = saved["horizon_years"]
+            strategy_choice = saved["strategy_choice"]
+            short_window = saved["short_window"]
+            long_window = saved["long_window"]
+
+        if st.button("← Start a new experiment"):
+            st.session_state.pop("active_run", None)
+            safe_rerun()
 
         # clear auto_run so it doesn't repeat
         if st.session_state.get("auto_run", False):
@@ -311,42 +330,11 @@ if page == "Backtest Simulator":
             st.subheader("Same-period results")
             st.dataframe(compare_results(results_dict), hide_index=True)
 
-            if mode == "Beginner Mode" and len(results_dict) > 1:
-                actual_riskiest = largest_drawdown_strategies(results_dict)
-                prediction = st.session_state.get("risk_prediction")
-                st.subheader("Prediction vs. Reality")
-                st.write(f"Your prediction: **{prediction}**")
-                reason = st.session_state.get("risk_reason", "").strip()
-                if reason:
-                    st.write(f"Your reasoning: {reason}")
-                if not actual_riskiest:
-                    st.info(
-                        "No strategy had a measurable decline in this test period, "
-                        "so there is no largest drawdown to identify."
-                    )
-                elif prediction not in results_dict:
-                    st.warning(
-                        f"{prediction} could not be evaluated because this date range "
-                        "did not provide enough out-of-sample predictions."
-                    )
-                elif prediction in actual_riskiest:
-                    actual_label = " and ".join(actual_riskiest)
-                    st.success(
-                        f"Your prediction matched the result: {actual_label} "
-                        "had the largest historical drawdown."
-                    )
-                else:
-                    actual_label = " and ".join(actual_riskiest)
-                    st.info(
-                        f"In this test period, {actual_label} had the largest "
-                        "historical drawdown. A different date range can change the result."
-                    )
-                if actual_riskiest:
-                    st.caption(
-                        "Drawdown measures the largest fall from a previous "
-                        "investment-performance high; deposits are excluded. "
-                        "This historical result does not predict future losses."
-                    )
+            if mode == "Beginner Mode":
+                st.info(
+                    "Want to test your intuition? Open the **Prediction Lab** in the sidebar "
+                    "and guess the result before you see it."
+                )
 
             if mode == "Beginner Mode":
                 st.subheader("How did each strategy perform?")
@@ -555,8 +543,9 @@ if page == "Backtest Simulator":
                     "results": results,
                     "created_at": pd.Timestamp.now().isoformat(),
                 }
-                ex_hist.append(summary)
-                st.session_state["experiments"] = ex_hist
+                if fresh_run:  # don't re-save the same experiment on every redraw
+                    ex_hist.append(summary)
+                    st.session_state["experiments"] = ex_hist
 
             if mode == "Beginner Mode":
                 st.subheader(f"Your results using {name}")
@@ -929,6 +918,7 @@ if page == "Backtest Simulator":
                     "monthly_contribution": 100,
                     "horizon_years": 10,
                     "ticker": "VTI",
+                    "strategy": "Buy & Hold",
                 }
                 st.session_state["run_params"] = demo
                 st.session_state["auto_run"] = True
@@ -943,6 +933,8 @@ if page == "Backtest Simulator":
             4. Click Run Backtest
             """)
 
+elif page == "Prediction Lab":
+    render_lab_page(load_market_data)
 elif page == "Investing Guide":
     render_investing_guide()
 elif page == "Methodology":
